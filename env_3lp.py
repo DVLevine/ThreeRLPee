@@ -58,7 +58,7 @@ class ThreeLPGotoGoalEnv(gym.Env):
         self.obs_dim = self.state_dim_3lp + self.goal_dim + self.phase_dim
 
         # --- action space ---
-        # For the Python simulator, we drive the 4 hip/ankle inputs (U block).
+        # For the Python simulator, we drive U (4 hip/ankle) + V (4 ramped torques).
         self.action_dim = self.sim.action_dim if self.sim is not None else 8
 
         self.action_space = spaces.Box(

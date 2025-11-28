@@ -12,16 +12,20 @@ except Exception:  # pragma: no cover - scipy may not be installed
 
 def _matrix_exponential(mat: np.ndarray) -> np.ndarray:
     """
-    Compute exp(mat) with scipy if available, otherwise fall back to an
-    eigen-decomposition. The fallback assumes the matrix is diagonalizable,
-    which is true for the modest sizes we use here.
+    Compute exp(mat) with scipy if available. If scipy is missing, fall back to
+    an eigen-decomposition with a Moore-Penrose pseudo-inverse to tolerate
+    near-singular eigenvector matrices.
     """
     if _scipy_expm is not None:
         return _scipy_expm(mat)
-    # Fallback: V exp(Λ) V^{-1}
+    # Fallback: V exp(Λ) V^{-1} (or V^{+} if singular)
     w, v = np.linalg.eig(mat)
-    vinv = np.linalg.inv(v)
-    return (v * np.exp(w)) @ vinv
+    try:
+        vinv = np.linalg.inv(v)
+    except np.linalg.LinAlgError:
+        vinv = np.linalg.pinv(v)
+    exp_w = np.exp(w)
+    return v @ np.diag(exp_w) @ vinv
 
 
 @dataclass
@@ -261,8 +265,8 @@ class ThreeLPSimPy:
     Minimal stateful 3LP simulator in Python.
 
     - State Q: [X2x, X2y, x1x, x1y, X3x, X3y, X2dx, X2dy, x1dx, x1dy, X3dx, X3dy]
-    - Action drives only the 4 hip/ankle inputs (U). V/W are zero; d is set from
-      the stance sign and flips every stride.
+    - Action drives the 4 hip/ankle inputs (U) and the 4 ramped torques (V).
+      W is zero; d is set from the stance sign and flips every stride.
     """
 
     def __init__(
@@ -280,7 +284,7 @@ class ThreeLPSimPy:
         self.max_action = float(max_action)
 
         self.state_dim = 12
-        self.action_dim = 4
+        self.action_dim = 8  # U (4) + V (4)
         self.phase_durations = {"ds": self.t_ds, "ss": self.t_ss}
 
         # Precompute discrete maps for a single control step.
@@ -316,7 +320,8 @@ class ThreeLPSimPy:
         act = np.clip(act, -self.max_action, self.max_action)
 
         r = np.zeros(13, dtype=np.float64)
-        r[0:4] = act
+        r[0:4] = act[0:4]          # U
+        r[4:8] = act[4:8] if act.shape[0] > 4 else 0.0  # V
         r[12] = self.support_sign
 
         D = self._D_ds if self.phase == "ds" else self._D_ss
