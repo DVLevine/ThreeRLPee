@@ -9,7 +9,7 @@ from policy_3lp import PolicyConfig, LinearBasisActor, QuadraticCritic
 
 
 class RunningNorm:
-    def __init__(self, epsilon=1e-4, shape=None, device="cpu"):
+    def __init__(self, epsilon=1e-8, shape=None, device="cpu"):
         self.mean = None
         self.var = None
         self.count = epsilon
@@ -42,7 +42,7 @@ class RunningNorm:
     def normalize(self, x: torch.Tensor):
         if self.mean is None:
             return x
-        return (x - self.mean) / torch.sqrt(self.var + 1e-8)
+        return (x - self.mean) / torch.sqrt(self.var + 1e-6)
 
 
 def collect_rollout(env, actor, critic, horizon=2048, gamma=0.99, lam=0.95, device="cpu", obs_norm: RunningNorm | None = None):
