@@ -71,8 +71,11 @@ def collect_rollout(env, actor, critic, horizon=2048, gamma=0.99, lam=0.95, devi
     for t in range(horizon):
         with torch.no_grad():
             # Build basis and value
-            phi = actor.encoder(obs_n.unsqueeze(0))
-            value = critic(phi).squeeze(0)
+            if hasattr(actor, "encoder") and hasattr(actor.encoder, "critic_features"):
+                critic_phi = actor.encoder.critic_features(obs_n.unsqueeze(0))
+                value = critic(critic_phi).squeeze(0)
+            else:
+                value = critic(obs_n.unsqueeze(0)).squeeze(0)
             action, logp, _ = actor.act(obs_n.unsqueeze(0))
         action_np = action.squeeze(0).cpu().numpy()
 
@@ -104,8 +107,11 @@ def collect_rollout(env, actor, critic, horizon=2048, gamma=0.99, lam=0.95, devi
 
     # Bootstrap value for the last observation
     with torch.no_grad():
-        phi_last = actor.encoder(obs_n.unsqueeze(0))
-        next_value = critic(phi_last).squeeze(0)
+        if hasattr(actor, "encoder") and hasattr(actor.encoder, "critic_features"):
+            phi_last = actor.encoder.critic_features(obs_n.unsqueeze(0))
+            next_value = critic(phi_last).squeeze(0)
+        else:
+            next_value = critic(obs_n.unsqueeze(0)).squeeze(0)
 
     # Convert to tensors
     obs_buf = torch.stack(obs_buf)
@@ -150,13 +156,13 @@ def train(policy_type: str = "linear"):
     # --- Build policy & critic ---
     obs_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
-    basis_dim = 64  # choose something reasonable
+    basis_dim = 64  # legacy MLP basis placeholder
 
     cfg = PolicyConfig(obs_dim=obs_dim, action_dim=action_dim, basis_dim=basis_dim)
 
     if policy_type == "linear":
         actor = LinearBasisActor(cfg).to(device)
-        critic = QuadraticCritic(basis_dim=basis_dim).to(device)
+        critic = QuadraticCritic(basis_dim=cfg.critic_basis_dim).to(device)
     elif policy_type == "mlp":
         actor = MLPActor(cfg).to(device)
         critic = MLPCritic(cfg).to(device)
@@ -214,8 +220,11 @@ def train(policy_type: str = "linear"):
                 clipped = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * adv_mb
                 pi_loss = -torch.min(unclipped, clipped).mean() - entropy_coef * entropy
 
-                phi = actor.encoder(obs_mb)
-                values = critic(phi)
+                if hasattr(actor, "encoder") and hasattr(actor.encoder, "critic_features"):
+                    critic_phi = actor.encoder.critic_features(obs_mb)
+                    values = critic(critic_phi)
+                else:
+                    values = critic(obs_mb)
                 v_loss = nn.functional.mse_loss(values, ret_mb)
 
                 pi_optimizer.zero_grad()
