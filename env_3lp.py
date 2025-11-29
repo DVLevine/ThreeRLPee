@@ -5,6 +5,11 @@ import numpy as np
 
 from three_lp_py import ThreeLPSimPy
 
+try:
+    from three_lp_cpp import ThreeLPSim as ThreeLPSimCpp  # type: ignore
+except Exception:
+    ThreeLPSimCpp = None
+
 
 class ThreeLPGotoGoalEnv(gym.Env):
     """
@@ -33,17 +38,26 @@ class ThreeLPGotoGoalEnv(gym.Env):
         seed: int | None = None,
         use_python_sim: bool = True,
         sim_kwargs: dict | None = None,
+        fall_vel_threshold: float = 5.0,
+        fall_pos_threshold: float = 5.0,
     ):
         super().__init__()
         sim_kwargs = sim_kwargs or {}
 
-        self.sim = ThreeLPSimPy(dt=dt, max_action=max_action, **sim_kwargs) if use_python_sim else None
+        if use_python_sim:
+            self.sim = ThreeLPSimPy(dt=dt, max_action=max_action, **sim_kwargs)
+        else:
+            if ThreeLPSimCpp is None:
+                raise RuntimeError("three_lp_cpp module not available; cannot use pybind sim")
+            self.sim = ThreeLPSimCpp(dt=dt, max_action=max_action, **sim_kwargs)
 
         self.dt = self.sim.dt if self.sim is not None else dt
         self.step_time = self.sim.t_ds + self.sim.t_ss if self.sim is not None else step_time
         self.max_episode_steps = max_episode_steps
         self.goal_radius = goal_radius
         self.max_action = max_action
+        self.fall_vel_threshold = fall_vel_threshold
+        self.fall_pos_threshold = fall_pos_threshold
 
         # --- 3LP state dimensions ---
         # Q = [X2x, X2y, x1x, x1y, X3x, X3y, X2dx, X2dy, x1dx, x1dy, X3dx, X3dy]
@@ -129,16 +143,25 @@ class ThreeLPGotoGoalEnv(gym.Env):
         pelvis_xy = self._get_pelvis_pos(self.state_3lp)
         dist_to_goal = np.linalg.norm(self.goal_world - pelvis_xy)
 
-        # Simple shaped reward: positive when moving closer to goal
-        # Optionally keep previous distance in env state and use delta.
-        reward = -dist_to_goal
+        # Reward: negative distance plus small velocity alignment toward goal
+        vel_xy = self.state_3lp[8:10]
+        goal_dir = (self.goal_world - pelvis_xy)
+        goal_dir_norm = np.linalg.norm(goal_dir) + 1e-6
+        goal_dir_unit = goal_dir / goal_dir_norm
+        vel_toward_goal = float(np.dot(vel_xy, goal_dir_unit))
+        reward = -dist_to_goal + 0.01 * vel_toward_goal
 
         # Termination conditions
         reached = dist_to_goal < self.goal_radius
         time_limit = self.step_count >= self.max_episode_steps
 
-        # Optional: fall detection (e.g. pelvis height < threshold)
+        # Fall detection: proxy using position/velocity blow-up.
         fallen = bool(self.sim_info.get("fallen", False)) if self.sim_info else False
+        if not fallen:
+            pos_norm = np.linalg.norm(self.state_3lp[:6])
+            vel_norm = np.linalg.norm(self.state_3lp[6:])
+            if pos_norm > self.fall_pos_threshold or vel_norm > self.fall_vel_threshold:
+                fallen = True
 
         terminated = reached or fallen
         truncated = time_limit and not terminated
@@ -168,7 +191,7 @@ class ThreeLPGotoGoalEnv(gym.Env):
             self.sim_info = {
                 "phase": "ds",
                 "phase_time": 0.0,
-                "phase_duration": self.sim.phase_durations.get("ds", self.step_time),
+                "phase_duration": getattr(self.sim, "t_ds", self.step_time / 2),
                 "support_sign": self.sim.support_sign,
                 "fallen": False,
                 "dt": self.sim.dt,

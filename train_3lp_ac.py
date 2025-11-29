@@ -8,39 +8,98 @@ from env_3lp import ThreeLPGotoGoalEnv
 from policy_3lp import PolicyConfig, LinearBasisActor, QuadraticCritic
 
 
-def collect_rollout(env, actor, critic, horizon=2048, gamma=0.99, lam=0.95, device="cpu"):
+class RunningNorm:
+    def __init__(self, epsilon=1e-4, shape=None, device="cpu"):
+        self.mean = None
+        self.var = None
+        self.count = epsilon
+        self.device = device
+        if shape is not None:
+            self.mean = torch.zeros(shape, device=device)
+            self.var = torch.ones(shape, device=device)
+
+    def update(self, x: torch.Tensor):
+        if self.mean is None:
+            self.mean = torch.zeros_like(x.mean(0))
+            self.var = torch.ones_like(self.mean)
+        batch_mean = x.mean(0)
+        batch_var = x.var(0, unbiased=False)
+        batch_count = x.shape[0]
+
+        delta = batch_mean - self.mean
+        tot_count = self.count + batch_count
+
+        new_mean = self.mean + delta * batch_count / tot_count
+        m_a = self.var * self.count
+        m_b = batch_var * batch_count
+        M2 = m_a + m_b + torch.square(delta) * self.count * batch_count / tot_count
+        new_var = M2 / tot_count
+
+        self.mean = new_mean
+        self.var = new_var
+        self.count = tot_count
+
+    def normalize(self, x: torch.Tensor):
+        if self.mean is None:
+            return x
+        return (x - self.mean) / torch.sqrt(self.var + 1e-8)
+
+
+def collect_rollout(env, actor, critic, horizon=2048, gamma=0.99, lam=0.95, device="cpu", obs_norm: RunningNorm | None = None):
     obs_buf = []
     act_buf = []
     logp_buf = []
     rew_buf = []
     val_buf = []
     done_buf = []
+    trunc_buf = []
 
     obs, info = env.reset()
     obs = torch.as_tensor(obs, dtype=torch.float32, device=device)
+    if obs_norm:
+        obs_norm.update(obs.unsqueeze(0))
+        obs_n = obs_norm.normalize(obs.unsqueeze(0)).squeeze(0)
+    else:
+        obs_n = obs
 
     for t in range(horizon):
         with torch.no_grad():
             # Build basis and value
-            phi = actor.encoder(obs.unsqueeze(0))
+            phi = actor.encoder(obs_n.unsqueeze(0))
             value = critic(phi).squeeze(0)
-            action, logp, _ = actor.act(obs.unsqueeze(0))
+            action, logp, _ = actor.act(obs_n.unsqueeze(0))
         action_np = action.squeeze(0).cpu().numpy()
 
-        next_obs, reward, done, truncated, info = env.step(action_np)
+        next_obs, reward, terminated, truncated, info = env.step(action_np)
         next_obs_t = torch.as_tensor(next_obs, dtype=torch.float32, device=device)
 
-        obs_buf.append(obs)
+        obs_buf.append(obs_n)
         act_buf.append(action.squeeze(0))
         logp_buf.append(logp.squeeze(0))
         rew_buf.append(torch.tensor(reward, dtype=torch.float32, device=device))
         val_buf.append(value)
-        done_buf.append(torch.tensor(done, dtype=torch.float32, device=device))
+        done_buf.append(torch.tensor(float(terminated), dtype=torch.float32, device=device))
+        trunc_buf.append(torch.tensor(float(truncated), dtype=torch.float32, device=device))
 
         obs = next_obs_t
-        if done:
+        if obs_norm:
+            obs_norm.update(obs.unsqueeze(0))
+            obs_n = obs_norm.normalize(obs.unsqueeze(0)).squeeze(0)
+        else:
+            obs_n = obs
+        if terminated or truncated:
             obs, info = env.reset()
             obs = torch.as_tensor(obs, dtype=torch.float32, device=device)
+            if obs_norm:
+                obs_norm.update(obs.unsqueeze(0))
+                obs_n = obs_norm.normalize(obs.unsqueeze(0)).squeeze(0)
+            else:
+                obs_n = obs
+
+    # Bootstrap value for the last observation
+    with torch.no_grad():
+        phi_last = actor.encoder(obs_n.unsqueeze(0))
+        next_value = critic(phi_last).squeeze(0)
 
     # Convert to tensors
     obs_buf = torch.stack(obs_buf)
@@ -49,14 +108,14 @@ def collect_rollout(env, actor, critic, horizon=2048, gamma=0.99, lam=0.95, devi
     rew_buf = torch.stack(rew_buf)
     val_buf = torch.stack(val_buf)
     done_buf = torch.stack(done_buf)
+    trunc_buf = torch.stack(trunc_buf)
 
     # Compute advantages with GAE(λ)
     advantages = torch.zeros_like(rew_buf, device=device)
     returns = torch.zeros_like(rew_buf, device=device)
     gae = 0.0
-    next_value = 0.0
     for t in reversed(range(horizon)):
-        mask = 1.0 - done_buf[t]
+        mask = 1.0 - torch.max(done_buf[t], trunc_buf[t])
         delta = rew_buf[t] + gamma * next_value * mask - val_buf[t]
         gae = delta + gamma * lam * mask * gae
         advantages[t] = gae
@@ -80,7 +139,7 @@ def train():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # --- Make environment ---
-    env = ThreeLPGotoGoalEnv()
+    env = ThreeLPGotoGoalEnv(use_python_sim=False)
 
     # --- Build policy & critic ---
     obs_dim = env.observation_space.shape[0]
@@ -95,8 +154,10 @@ def train():
     pi_optimizer = optim.Adam(actor.parameters(), lr=3e-4)
     v_optimizer = optim.Adam(critic.parameters(), lr=1e-3)
 
+    obs_norm = RunningNorm(shape=(obs_dim,), device=device)
+
     for iteration in range(1000):
-        batch = collect_rollout(env, actor, critic, horizon=2048, device=device)
+        batch = collect_rollout(env, actor, critic, horizon=2048, device=device, obs_norm=obs_norm)
 
         obs = batch["obs"].to(device)
         actions = batch["actions"].to(device)
@@ -109,9 +170,14 @@ def train():
         std = log_std.exp()
         dist = torch.distributions.Normal(mean, std)
         logp = dist.log_prob(actions).sum(-1)
+        entropy = dist.entropy().sum(-1).mean()
 
-        # Policy loss (simple A2C-style, no clipping)
-        pi_loss = -(logp * advantages).mean()
+        # PPO-style clipped policy loss
+        ratio = (logp - old_logp).exp()
+        clip_eps = 0.2
+        unclipped = ratio * advantages
+        clipped = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * advantages
+        pi_loss = -torch.min(unclipped, clipped).mean() - 0.01 * entropy
 
         # Critic loss
         phi = actor.encoder(obs)
