@@ -5,7 +5,13 @@ import torch.nn as nn
 import torch.optim as optim
 
 from env_3lp import ThreeLPGotoGoalEnv
-from policy_3lp import PolicyConfig, LinearBasisActor, QuadraticCritic
+from policy_3lp import (
+    PolicyConfig,
+    LinearBasisActor,
+    QuadraticCritic,
+    MLPActor,
+    MLPCritic,
+)
 
 
 class RunningNorm:
@@ -135,7 +141,7 @@ def collect_rollout(env, actor, critic, horizon=2048, gamma=0.99, lam=0.95, devi
     return batch
 
 
-def train():
+def train(policy_type: str = "linear"):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # --- Make environment ---
@@ -148,11 +154,23 @@ def train():
 
     cfg = PolicyConfig(obs_dim=obs_dim, action_dim=action_dim, basis_dim=basis_dim)
 
-    actor = LinearBasisActor(cfg).to(device)
-    critic = QuadraticCritic(basis_dim=basis_dim).to(device)
+    if policy_type == "linear":
+        actor = LinearBasisActor(cfg).to(device)
+        critic = QuadraticCritic(basis_dim=basis_dim).to(device)
+    elif policy_type == "mlp":
+        actor = MLPActor(cfg).to(device)
+        critic = MLPCritic(cfg).to(device)
+    else:
+        raise ValueError(f"Unknown policy_type {policy_type}")
 
     pi_optimizer = optim.Adam(actor.parameters(), lr=3e-4)
     v_optimizer = optim.Adam(critic.parameters(), lr=1e-3)
+
+    ppo_epochs = 10
+    minibatch_size = 256
+    clip_eps = 0.2
+    entropy_coef = 0.01
+    value_coef = 0.5
 
     obs_norm = RunningNorm(shape=(obs_dim,), device=device)
 
@@ -165,43 +183,77 @@ def train():
         advantages = batch["advantages"].to(device)
         returns = batch["returns"].to(device)
 
-        # Recompute dist and log probs under current policy
-        mean, log_std = actor(obs)
-        std = log_std.exp()
-        dist = torch.distributions.Normal(mean, std)
-        logp = dist.log_prob(actions).sum(-1)
-        entropy = dist.entropy().sum(-1).mean()
+        # PPO mini-batch updates
+        N = obs.shape[0]
+        entropy_meter = 0.0
+        clip_frac_meter = 0.0
+        pi_loss_meter = 0.0
+        v_loss_meter = 0.0
+        total_batches = 0
 
-        # PPO-style clipped policy loss
-        ratio = (logp - old_logp).exp()
-        clip_eps = 0.2
-        unclipped = ratio * advantages
-        clipped = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * advantages
-        pi_loss = -torch.min(unclipped, clipped).mean() - 0.01 * entropy
+        for _ in range(ppo_epochs):
+            perm = torch.randperm(N, device=device)
+            for start in range(0, N, minibatch_size):
+                end = start + minibatch_size
+                idx = perm[start:end]
 
-        # Critic loss
-        phi = actor.encoder(obs)
-        values = critic(phi)
-        v_loss = nn.functional.mse_loss(values, returns)
+                obs_mb = obs[idx]
+                act_mb = actions[idx]
+                old_logp_mb = old_logp[idx]
+                adv_mb = advantages[idx]
+                ret_mb = returns[idx]
 
-        # Optimize actor
-        pi_optimizer.zero_grad()
-        pi_loss.backward()
-        pi_optimizer.step()
+                mean, log_std = actor(obs_mb)
+                std = log_std.exp()
+                dist = torch.distributions.Normal(mean, std)
+                logp = dist.log_prob(act_mb).sum(-1)
+                entropy = dist.entropy().sum(-1).mean()
 
-        # Optimize critic
-        v_optimizer.zero_grad()
-        v_loss.backward()
-        v_optimizer.step()
+                ratio = (logp - old_logp_mb).exp()
+                unclipped = ratio * adv_mb
+                clipped = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * adv_mb
+                pi_loss = -torch.min(unclipped, clipped).mean() - entropy_coef * entropy
+
+                phi = actor.encoder(obs_mb)
+                values = critic(phi)
+                v_loss = nn.functional.mse_loss(values, ret_mb)
+
+                pi_optimizer.zero_grad()
+                pi_loss.backward()
+                pi_optimizer.step()
+
+                v_optimizer.zero_grad()
+                v_loss.backward()
+                v_optimizer.step()
+
+                clip_frac = (torch.gt(ratio, 1.0 + clip_eps) | torch.lt(ratio, 1.0 - clip_eps)).float().mean()
+
+                entropy_meter += entropy.item()
+                clip_frac_meter += clip_frac.item()
+                pi_loss_meter += pi_loss.item()
+                v_loss_meter += v_loss.item()
+                total_batches += 1
 
         if iteration % 10 == 0:
+            avg_entropy = entropy_meter / max(1, total_batches)
+            avg_clip = clip_frac_meter / max(1, total_batches)
+            avg_pi = pi_loss_meter / max(1, total_batches)
+            avg_v = v_loss_meter / max(1, total_batches)
             print(
                 f"Iter {iteration:04d} | "
-                f"pi_loss {pi_loss.item():.3f} | "
-                f"v_loss {v_loss.item():.3f} | "
-                f"adv {advantages.mean().item():.3f}"
+                f"pi {avg_pi:.3f} | "
+                f"v {avg_v:.3f} | "
+                f"ent {avg_entropy:.3f} | "
+                f"clip {avg_clip:.3f} | "
+                f"adv {advantages.mean().item():.3f} "
             )
 
 
 if __name__ == "__main__":
-    train()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Train 3LP policy with PPO-style updates.")
+    parser.add_argument("--policy-type", choices=["linear", "mlp"], default="linear")
+    args = parser.parse_args()
+
+    train(policy_type=args.policy_type)

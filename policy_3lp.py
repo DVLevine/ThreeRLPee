@@ -14,6 +14,7 @@ class PolicyConfig:
     action_dim: int
     basis_dim: int
     log_std_init: float = -0.5
+    hidden_sizes: tuple[int, ...] = (64, 64)
 
 
 class BasisEncoder(nn.Module):
@@ -106,6 +107,38 @@ class LinearBasisActor(nn.Module):
         return action, log_prob, mean
 
 
+class MLPActor(nn.Module):
+    """
+    Simple MLP policy with Gaussian head.
+    """
+
+    def __init__(self, cfg: PolicyConfig):
+        super().__init__()
+        layers = []
+        last = cfg.obs_dim
+        for h in cfg.hidden_sizes:
+            layers.append(nn.Linear(last, h))
+            layers.append(nn.Tanh())
+            last = h
+        self.net = nn.Sequential(*layers)
+        self.mean_head = nn.Linear(last, cfg.action_dim)
+        self.log_std = nn.Parameter(torch.ones(cfg.action_dim) * cfg.log_std_init)
+
+    def forward(self, obs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        x = self.net(obs)
+        mean = self.mean_head(x)
+        log_std = self.log_std.expand_as(mean)
+        return mean, log_std
+
+    def act(self, obs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        mean, log_std = self.forward(obs)
+        std = log_std.exp()
+        dist = Normal(mean, std)
+        action = dist.sample()
+        log_prob = dist.log_prob(action).sum(-1)
+        return action, log_prob, mean
+
+
 class QuadraticCritic(nn.Module):
     """
     Critic: V(φ) = 0.5 * ||L φ||^2 + bᵀ φ + c
@@ -130,3 +163,24 @@ class QuadraticCritic(nn.Module):
         quad = 0.5 * (y ** 2).sum(dim=-1)
         lin = (self.b * phi).sum(dim=-1)
         return quad + lin + self.c
+
+
+class MLPCritic(nn.Module):
+    """
+    MLP value function.
+    """
+
+    def __init__(self, cfg: PolicyConfig):
+        super().__init__()
+        layers = []
+        last = cfg.obs_dim
+        for h in cfg.hidden_sizes:
+            layers.append(nn.Linear(last, h))
+            layers.append(nn.Tanh())
+            last = h
+        self.net = nn.Sequential(*layers)
+        self.value_head = nn.Linear(last, 1)
+
+    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        x = self.net(obs)
+        return self.value_head(x).squeeze(-1)
