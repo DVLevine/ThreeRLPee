@@ -4,8 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="1a8e2bf6-3b61-46bf-9584-cf1449945024" name="Changes" comment="Added Multi Layer Perceptron as an option for function approximation.">
+    <list default="true" id="1a8e2bf6-3b61-46bf-9584-cf1449945024" name="Changes" comment="Added CLI commands, and prepared for initial walking test!">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/env_goal_walk.py" beforeDir="false" afterPath="$PROJECT_DIR$/env_goal_walk.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/policy_3lp.py" beforeDir="false" afterPath="$PROJECT_DIR$/policy_3lp.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/train_3lp_ac.py" beforeDir="false" afterPath="$PROJECT_DIR$/train_3lp_ac.py" afterDir="false" />
     </list>
@@ -22,7 +23,12 @@
     </option>
   </component>
   <component name="Git.Settings">
-    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+    <option name="RECENT_BRANCH_BY_REPOSITORY">
+      <map>
+        <entry key="$PROJECT_DIR$/ThreeLPee" value="funkyStrideMap" />
+      </map>
+    </option>
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$/ThreeLPee" />
   </component>
   <component name="GitHubPullRequestSearchHistory"><![CDATA[{
   "lastFilter": {
@@ -51,7 +57,7 @@
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
     "RunOnceActivity.git.unshallow": "true",
-    "git-widget-placeholder": "master",
+    "git-widget-placeholder": "PyBindForRL",
     "last_opened_file_path": "/home/d-line/PyCharmMiscProject",
     "node.js.detected.package.eslint": "true",
     "node.js.detected.package.tslint": "true",
@@ -76,7 +82,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1764059985891</updated>
-      <workItem from="1764059986984" duration="9503000" />
+      <workItem from="1764059986984" duration="15957000" />
     </task>
     <task id="LOCAL-00001" summary="Updating the project to have the three_lp dynamics native in python">
       <option name="closed" value="true" />
@@ -118,7 +124,31 @@
       <option name="project" value="LOCAL" />
       <updated>1764382531115</updated>
     </task>
-    <option name="localTasksCounter" value="6" />
+    <task id="LOCAL-00006" summary="Added rough draft of linear basis functions and other details.">
+      <option name="closed" value="true" />
+      <created>1764389919260</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1764389919260</updated>
+    </task>
+    <task id="LOCAL-00007" summary="Further dev - preparing new full environment and setup for RL training.">
+      <option name="closed" value="true" />
+      <created>1764490823355</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1764490823355</updated>
+    </task>
+    <task id="LOCAL-00008" summary="Added CLI commands, and prepared for initial walking test!">
+      <option name="closed" value="true" />
+      <created>1764491476988</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1764491476988</updated>
+    </task>
+    <option name="localTasksCounter" value="9" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -141,7 +171,10 @@
     <MESSAGE value="some additions for boilerplate required for the RL part." />
     <MESSAGE value="Added initial tests for basic dynamic simulation falling." />
     <MESSAGE value="Added Multi Layer Perceptron as an option for function approximation." />
-    <option name="LAST_COMMIT_MESSAGE" value="Added Multi Layer Perceptron as an option for function approximation." />
+    <MESSAGE value="Added rough draft of linear basis functions and other details." />
+    <MESSAGE value="Further dev - preparing new full environment and setup for RL training." />
+    <MESSAGE value="Added CLI commands, and prepared for initial walking test!" />
+    <option name="LAST_COMMIT_MESSAGE" value="Added CLI commands, and prepared for initial walking test!" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/ThreeRLPee$train_3lp_ac.coverage" NAME="train_3lp_ac Coverage Results" MODIFIED="1764061027777" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />

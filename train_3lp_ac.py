@@ -4,7 +4,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from env_3lp import ThreeLPGotoGoalEnv
 from policy_3lp import (
     PolicyConfig,
     LinearBasisActor,
@@ -143,22 +142,49 @@ def collect_rollout(env, actor, critic, horizon=2048, gamma=0.99, lam=0.95, devi
         "logp": logp_buf,
         "advantages": advantages,
         "returns": returns,
+        "done": done_buf,
+        "trunc": trunc_buf,
+        "rewards": rew_buf,
     }
     return batch
 
 
-def train(policy_type: str = "linear"):
+def train(
+    policy_type: str = "linear",
+    env_type: str = "goto_goal",
+    ppo_epochs: int = 10,
+    minibatch_size: int = 256,
+    clip_eps: float = 0.2,
+    entropy_coef: float = 0.01,
+    value_coef: float = 0.5,
+    total_iterations: int = 1000,
+):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # --- Make environment ---
-    env = ThreeLPGotoGoalEnv(use_python_sim=False)
+    if env_type == "goal_walk":
+        from env_goal_walk import ThreeLPGoalWalkEnv  # lazy import to avoid pybind conflicts
+
+        env = ThreeLPGoalWalkEnv()
+    else:
+        from env_3lp import ThreeLPGotoGoalEnv  # lazy import
+
+        env = ThreeLPGotoGoalEnv(use_python_sim=False)
 
     # --- Build policy & critic ---
     obs_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
     basis_dim = 64  # legacy MLP basis placeholder
+    encoder_type = "goal_walk" if env_type == "goal_walk" else "raw"
 
-    cfg = PolicyConfig(obs_dim=obs_dim, action_dim=action_dim, basis_dim=basis_dim)
+    cfg = PolicyConfig(
+        obs_dim=obs_dim,
+        action_dim=action_dim,
+        basis_dim=basis_dim,
+        encoder_type=encoder_type,
+        actor_basis_dim=15 if env_type == "goal_walk" else 15,
+        critic_basis_dim=22 if env_type == "goal_walk" else 22,
+    )
 
     if policy_type == "linear":
         actor = LinearBasisActor(cfg).to(device)
@@ -172,15 +198,9 @@ def train(policy_type: str = "linear"):
     pi_optimizer = optim.Adam(actor.parameters(), lr=3e-4)
     v_optimizer = optim.Adam(critic.parameters(), lr=1e-3)
 
-    ppo_epochs = 10
-    minibatch_size = 256
-    clip_eps = 0.2
-    entropy_coef = 0.01
-    value_coef = 0.5
-
     obs_norm = RunningNorm(shape=(obs_dim,), device=device)
 
-    for iteration in range(1000):
+    for iteration in range(total_iterations):
         batch = collect_rollout(env, actor, critic, horizon=2048, device=device, obs_norm=obs_norm)
 
         obs = batch["obs"].to(device)
@@ -188,6 +208,9 @@ def train(policy_type: str = "linear"):
         old_logp = batch["logp"].to(device)
         advantages = batch["advantages"].to(device)
         returns = batch["returns"].to(device)
+        rewards_np = batch["rewards"].cpu().numpy()
+        done_np = batch["done"].cpu().numpy()
+        trunc_np = batch["trunc"].cpu().numpy()
 
         # PPO mini-batch updates
         N = obs.shape[0]
@@ -196,6 +219,19 @@ def train(policy_type: str = "linear"):
         pi_loss_meter = 0.0
         v_loss_meter = 0.0
         total_batches = 0
+        # Track simple rollout stats
+        episode_rewards = []
+        episode_lengths = []
+        ep_reward = 0.0
+        ep_len = 0
+        for r, d, tr in zip(rewards_np, done_np, trunc_np):
+            ep_reward += r
+            ep_len += 1
+            if d or tr:
+                episode_rewards.append(ep_reward)
+                episode_lengths.append(ep_len)
+                ep_reward = 0.0
+                ep_len = 0
 
         for _ in range(ppo_epochs):
             perm = torch.randperm(N, device=device)
@@ -248,13 +284,17 @@ def train(policy_type: str = "linear"):
             avg_clip = clip_frac_meter / max(1, total_batches)
             avg_pi = pi_loss_meter / max(1, total_batches)
             avg_v = v_loss_meter / max(1, total_batches)
+            avg_ep_rew = float(np.mean(episode_rewards)) if episode_rewards else 0.0
+            avg_ep_len = float(np.mean(episode_lengths)) if episode_lengths else 0.0
             print(
                 f"Iter {iteration:04d} | "
                 f"pi {avg_pi:.3f} | "
                 f"v {avg_v:.3f} | "
                 f"ent {avg_entropy:.3f} | "
                 f"clip {avg_clip:.3f} | "
-                f"adv {advantages.mean().item():.3f} "
+                f"adv {advantages.mean().item():.3f} | "
+                f"R_ep {avg_ep_rew:.3f} | "
+                f"len {avg_ep_len:.1f}"
             )
 
 
@@ -263,6 +303,22 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Train 3LP policy with PPO-style updates.")
     parser.add_argument("--policy-type", choices=["linear", "mlp"], default="linear")
+    parser.add_argument("--env-type", choices=["goto_goal", "goal_walk"], default="goto_goal")
+    parser.add_argument("--ppo-epochs", type=int, default=10)
+    parser.add_argument("--minibatch-size", type=int, default=256)
+    parser.add_argument("--clip-eps", type=float, default=0.2)
+    parser.add_argument("--entropy-coef", type=float, default=0.01)
+    parser.add_argument("--value-coef", type=float, default=0.5)
+    parser.add_argument("--iterations", type=int, default=1000)
     args = parser.parse_args()
 
-    train(policy_type=args.policy_type)
+    train(
+        policy_type=args.policy_type,
+        env_type=args.env_type,
+        ppo_epochs=args.ppo_epochs,
+        minibatch_size=args.minibatch_size,
+        clip_eps=args.clip_eps,
+        entropy_coef=args.entropy_coef,
+        value_coef=args.value_coef,
+        total_iterations=args.iterations,
+    )

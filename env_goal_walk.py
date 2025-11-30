@@ -81,6 +81,8 @@ class ThreeLPGoalWalkEnv(gym.Env):
         self.goal_world = None
         self.step_count = 0
         self.d_success = None
+        self.pos_bound = None
+        self.vel_bound = None
 
     # ---------- Helpers ----------
 
@@ -111,6 +113,8 @@ class ThreeLPGoalWalkEnv(gym.Env):
         self.L_ref = params.h1
         self.V_ref = self.L_ref / (t_ds + t_ss)
         self.d_success = 0.1 * self.L_ref
+        self.pos_bound = 3.0 * self.L_ref
+        self.vel_bound = 10.0 * self.V_ref
 
     def _fold(self, y):
         return self.leg_flag * y
@@ -243,7 +247,14 @@ class ThreeLPGoalWalkEnv(gym.Env):
 
         # Termination
         success = d_goal < self.d_success
-        failure = False  # placeholder fall detection
+        # Simple fall detection: blow-up of rel positions/velocities
+        X2 = state_vec[0:2]; x1 = state_vec[2:4]; X3 = state_vec[4:6]
+        X2dot = state_vec[6:8]; x1dot = state_vec[8:10]
+        s1 = x1 - X3
+        s2 = X2 - X3
+        vel_norm = max(np.linalg.norm(X2dot), np.linalg.norm(x1dot))
+        pos_norm = max(np.linalg.norm(s1), np.linalg.norm(s2))
+        failure = bool(np.isnan(state_vec).any() or np.isinf(state_vec).any() or pos_norm > self.pos_bound or vel_norm > self.vel_bound)
         terminated = success or failure
         truncated = self.step_count + 1 >= self.max_steps
 

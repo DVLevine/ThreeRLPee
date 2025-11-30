@@ -15,6 +15,7 @@ class PolicyConfig:
     basis_dim: int = 64  # legacy/default for MLP paths
     actor_basis_dim: int = 15
     critic_basis_dim: int = 22
+    encoder_type: str = "raw"  # "raw" (old env) or "goal_walk"
     log_std_init: float = -0.5
     hidden_sizes: tuple[int, ...] = (64, 64)
 
@@ -150,6 +151,85 @@ class BasisEncoder(nn.Module):
         return phi_c
 
 
+class GoalWalkEncoder(nn.Module):
+    """
+    Encoder for the 14-D folded, normalized obs from ThreeLPGoalWalkEnv.
+    Actor features match the structured 15-D vector; critic features include quadratic terms.
+    """
+
+    def __init__(self, actor_basis_dim: int = 15, critic_basis_dim: int = 22):
+        super().__init__()
+        self.actor_basis_dim = actor_basis_dim
+        self.critic_basis_dim = critic_basis_dim
+
+    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        # obs layout:
+        # [0] r_pelvis_x, [1] r_pelvis_y,
+        # [2] r_swing_x,  [3] r_swing_y,
+        # [4] v_pelvis_x, [5] v_pelvis_y,
+        # [6] v_swing_x,  [7] v_swing_y,
+        # [8] g_rel_x,    [9] g_rel_y,
+        # [10] g_dist,    [11] g_heading,
+        # [12] phase,     [13] leg_flag
+        sigma = obs[..., 12:13]
+        sigma2 = sigma * sigma
+        sinp = torch.sin(torch.pi * sigma)
+        cosp = torch.cos(torch.pi * sigma)
+        phi = torch.cat(
+            [
+                torch.ones_like(sigma),
+                obs[..., 0:1], obs[..., 1:2],  # s1
+                obs[..., 2:3], obs[..., 3:4],  # s2
+                obs[..., 4:5], obs[..., 5:6],  # v1
+                obs[..., 6:7], obs[..., 7:8],  # v2
+                obs[..., 8:9], obs[..., 9:10],  # g_rel
+                sigma,
+                sigma2,
+                sinp,
+                cosp,
+            ],
+            dim=-1,
+        )
+        return phi
+
+    def critic_features(self, obs: torch.Tensor) -> torch.Tensor:
+        z = torch.cat(
+            [
+                obs[..., 0:1], obs[..., 1:2],  # s1
+                obs[..., 2:3], obs[..., 3:4],  # s2
+                obs[..., 4:5], obs[..., 5:6],  # v1
+                obs[..., 6:7], obs[..., 7:8],  # v2
+                obs[..., 8:9], obs[..., 9:10],  # g_rel
+            ],
+            dim=-1,
+        )
+        s1 = z[..., 0:2]
+        s2 = z[..., 2:4]
+        v1 = z[..., 4:6]
+        v2 = z[..., 6:8]
+        g = z[..., 8:10]
+        q1 = (s1 ** 2).sum(dim=-1, keepdim=True)
+        q2 = (s2 ** 2).sum(dim=-1, keepdim=True)
+        q3 = (v1 ** 2).sum(dim=-1, keepdim=True)
+        q4 = (v2 ** 2).sum(dim=-1, keepdim=True)
+        q5 = (g ** 2).sum(dim=-1, keepdim=True)
+        q6 = (s1 * v1).sum(dim=-1, keepdim=True)
+        q7 = (s2 * v2).sum(dim=-1, keepdim=True)
+        q8 = (s1 * g).sum(dim=-1, keepdim=True)
+        q9 = (s2 * g).sum(dim=-1, keepdim=True)
+        q10 = (v1 * g).sum(dim=-1, keepdim=True)
+        q11 = (v2 * g).sum(dim=-1, keepdim=True)
+        phi_c = torch.cat(
+            [
+                torch.ones_like(q1),
+                z,
+                q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11,
+            ],
+            dim=-1,
+        )
+        return phi_c
+
+
 class LinearBasisActor(nn.Module):
     """
     Actor: a linear map over basis features.
@@ -162,12 +242,15 @@ class LinearBasisActor(nn.Module):
         super().__init__()
         self.cfg = cfg
 
-        self.encoder = BasisEncoder(
-            obs_dim=cfg.obs_dim,
-            actor_basis_dim=cfg.actor_basis_dim,
-            critic_basis_dim=cfg.critic_basis_dim,
-            state_dim_3lp=12,
-        )
+        if cfg.encoder_type == "goal_walk":
+            self.encoder = GoalWalkEncoder(actor_basis_dim=cfg.actor_basis_dim, critic_basis_dim=cfg.critic_basis_dim)
+        else:
+            self.encoder = BasisEncoder(
+                obs_dim=cfg.obs_dim,
+                actor_basis_dim=cfg.actor_basis_dim,
+                critic_basis_dim=cfg.critic_basis_dim,
+                state_dim_3lp=12,
+            )
 
         self.linear = nn.Linear(cfg.actor_basis_dim, cfg.action_dim)
         self.log_std = nn.Parameter(torch.ones(cfg.action_dim) * cfg.log_std_init)
