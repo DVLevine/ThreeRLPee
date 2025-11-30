@@ -15,7 +15,7 @@ class PolicyConfig:
     basis_dim: int = 64  # legacy/default for MLP paths
     actor_basis_dim: int = 15
     critic_basis_dim: int = 22
-    encoder_type: str = "raw"  # "raw" (old env) or "goal_walk"
+    encoder_type: str = "raw"  # "raw", "goal_walk", "vel_walk"
     log_std_init: float = -0.5
     hidden_sizes: tuple[int, ...] = (64, 64)
 
@@ -230,6 +230,70 @@ class GoalWalkEncoder(nn.Module):
         return phi_c
 
 
+class VelWalkEncoder(nn.Module):
+    """
+    Encoder for velocity-tracking env (obs 10D: r_pel(2), r_sw(2), v_pel(2), v_sw(2), v_cmd(2)).
+    Actor features (16D) and critic features (45D) per the spec.
+    """
+
+    def __init__(self, actor_basis_dim: int = 16, critic_basis_dim: int = 45):
+        super().__init__()
+        self.actor_basis_dim = actor_basis_dim
+        self.critic_basis_dim = critic_basis_dim
+
+    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        r_px, r_py = obs[..., 0:1], obs[..., 1:2]
+        r_sx, r_sy = obs[..., 2:3], obs[..., 3:4]
+        v_px, v_py = obs[..., 4:5], obs[..., 5:6]
+        v_sx, v_sy = obs[..., 6:7], obs[..., 7:8]
+        v_cmdx, v_cmdy = obs[..., 8:9], obs[..., 9:10]
+        e_vx = v_px - v_cmdx
+        e_vy = v_py - v_cmdy
+        T = 0.7  # default step duration guess; could be passed in obs if available
+        phi = torch.cat(
+            [
+                torch.ones_like(r_px),
+                e_vx,
+                e_vy,
+                r_px,
+                r_py,
+                r_sx,
+                r_sy,
+                v_sx,
+                v_sy,
+                v_cmdx,
+                v_cmdy,
+                T * e_vx,
+                T * e_vy,
+                r_px / T,
+                T * v_px,
+                T * v_py,
+            ],
+            dim=-1,
+        )
+        return phi
+
+    def critic_features(self, obs: torch.Tensor) -> torch.Tensor:
+        # z = [e_vx, e_vy, r_px, r_py, r_sx, r_sy, v_sx, v_sy]
+        r_px, r_py = obs[..., 0:1], obs[..., 1:2]
+        r_sx, r_sy = obs[..., 2:3], obs[..., 3:4]
+        v_px, v_py = obs[..., 4:5], obs[..., 5:6]
+        v_sx, v_sy = obs[..., 6:7], obs[..., 7:8]
+        v_cmdx, v_cmdy = obs[..., 8:9], obs[..., 9:10]
+        e_vx = v_px - v_cmdx
+        e_vy = v_py - v_cmdy
+        z = torch.cat([e_vx, e_vy, r_px, r_py, r_sx, r_sy, v_sx, v_sy], dim=-1)
+        batch, n = z.shape
+        terms = [torch.ones(batch, 1, device=z.device, dtype=z.dtype), z]
+        quad = []
+        for i in range(n):
+            for j in range(i, n):
+                quad.append((z[:, i] * z[:, j]).unsqueeze(-1))
+        quad = torch.cat(quad, dim=-1)
+        psi = torch.cat(terms + [quad], dim=-1)
+        return psi
+
+
 class LinearBasisActor(nn.Module):
     """
     Actor: a linear map over basis features.
@@ -244,6 +308,8 @@ class LinearBasisActor(nn.Module):
 
         if cfg.encoder_type == "goal_walk":
             self.encoder = GoalWalkEncoder(actor_basis_dim=cfg.actor_basis_dim, critic_basis_dim=cfg.critic_basis_dim)
+        elif cfg.encoder_type == "vel_walk":
+            self.encoder = VelWalkEncoder(actor_basis_dim=cfg.actor_basis_dim, critic_basis_dim=cfg.critic_basis_dim)
         else:
             self.encoder = BasisEncoder(
                 obs_dim=cfg.obs_dim,

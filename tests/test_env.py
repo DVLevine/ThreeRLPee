@@ -27,14 +27,14 @@ def test_reward_velocity_alignment():
     obs, info = env.reset()
     env.goal_world = np.array([1.0, 0.0], dtype=np.float32)
     env.state_3lp = np.zeros_like(env.state_3lp)
-    # Positive x velocity
-    env.state_3lp[8] = 1.0
+    env.prev_dist = 1.0
+    env.state_3lp[2] = 0.5  # pelvis ahead
     obs_pos = env._compute_observation()
-    r_pos, *_ = env._compute_reward_and_done(obs_pos)
-    # Negative x velocity
-    env.state_3lp[8] = -1.0
+    r_pos, _, _, info_pos = env._compute_reward_and_done(obs_pos)
+    env.prev_dist = 1.0
+    env.state_3lp[2] = 0.0  # pelvis behind
     obs_neg = env._compute_observation()
-    r_neg, *_ = env._compute_reward_and_done(obs_neg)
+    r_neg, _, _, info_neg = env._compute_reward_and_done(obs_neg)
     assert r_pos > r_neg
 
 

@@ -35,6 +35,7 @@ class ThreeLPGoalWalkEnv(gym.Env):
         noise_std=None,
         randomize_params=True,
         device="cpu",
+        debug_log=False,
     ):
         super().__init__()
         self.goal_x_range = goal_x_range
@@ -83,6 +84,7 @@ class ThreeLPGoalWalkEnv(gym.Env):
         self.d_success = None
         self.pos_bound = None
         self.vel_bound = None
+        self.debug_log = debug_log
 
     # ---------- Helpers ----------
 
@@ -272,6 +274,11 @@ class ThreeLPGoalWalkEnv(gym.Env):
             "t_ds": self.sim.t_ds,
             "t_ss": self.sim.t_ss,
         }
+        if self.debug_log:
+            info["state_vec"] = state_vec
+            info["pos_norm"] = pos_norm
+            info["vel_norm"] = vel_norm
+            info["progress"] = progress
         return obs, reward, terminated, truncated, info
 
     def render(self):

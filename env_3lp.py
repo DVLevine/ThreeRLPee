@@ -1,4 +1,5 @@
 # env_3lp.py
+import math
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
@@ -6,7 +7,11 @@ import numpy as np
 from three_lp_py import ThreeLPSimPy
 
 try:
-    from three_lp_cpp import ThreeLPSim as ThreeLPSimCpp  # type: ignore
+    import threelp
+
+    ThreeLPSimCpp = threelp.ThreeLPSim  # type: ignore
+    ThreeLPStateCpp = threelp.ThreeLPState  # type: ignore
+    ThreeLPParamsCpp = threelp.ThreeLPParams  # type: ignore
 except Exception:
     ThreeLPSimCpp = None
 
@@ -40,6 +45,8 @@ class ThreeLPGotoGoalEnv(gym.Env):
         sim_kwargs: dict | None = None,
         fall_vel_threshold: float = 5.0,
         fall_pos_threshold: float = 5.0,
+        reward_weights: dict | None = None,
+        debug_log: bool = False,
     ):
         super().__init__()
         sim_kwargs = sim_kwargs or {}
@@ -49,7 +56,11 @@ class ThreeLPGotoGoalEnv(gym.Env):
         else:
             if ThreeLPSimCpp is None:
                 raise RuntimeError("three_lp_cpp module not available; cannot use pybind sim")
-            self.sim = ThreeLPSimCpp(dt=dt, max_action=max_action, **sim_kwargs)
+            t_ds_arg = sim_kwargs.get("t_ds", 0.1)
+            t_ss_arg = sim_kwargs.get("t_ss", 0.3)
+            params_arg = sim_kwargs.get("params", ThreeLPParamsCpp.Adult() if ThreeLPParamsCpp else None)
+            recenter = sim_kwargs.get("recenter_on_reset", True)
+            self.sim = ThreeLPSimCpp(t_ds=t_ds_arg, t_ss=t_ss_arg, params=params_arg, recenter_on_reset=recenter)
 
         self.dt = self.sim.dt if self.sim is not None else dt
         self.step_time = self.sim.t_ds + self.sim.t_ss if self.sim is not None else step_time
@@ -58,6 +69,14 @@ class ThreeLPGotoGoalEnv(gym.Env):
         self.max_action = max_action
         self.fall_vel_threshold = fall_vel_threshold
         self.fall_pos_threshold = fall_pos_threshold
+        self.reward_weights = reward_weights or {
+            "progress": 5.0,
+            "alive": 0.5,
+            "action": 0.001,
+            "smooth": 0.0005,
+            "success": 10.0,
+            "fail": -10.0,
+        }
 
         # --- 3LP state dimensions ---
         # Q = [X2x, X2y, x1x, x1y, X3x, X3y, X2dx, X2dy, x1dx, x1dy, X3dx, X3dy]
@@ -97,6 +116,9 @@ class ThreeLPGotoGoalEnv(gym.Env):
         self.phase_time = 0.0
         self.sim_info = {}
         self.step_count = 0
+        self.prev_action = np.zeros(self.action_dim, dtype=np.float32)
+        self.prev_dist = None
+        self.debug_log = debug_log
 
     # ------------- Utility methods -------------
 
@@ -142,14 +164,12 @@ class ThreeLPGotoGoalEnv(gym.Env):
         # Distance to goal
         pelvis_xy = self._get_pelvis_pos(self.state_3lp)
         dist_to_goal = np.linalg.norm(self.goal_world - pelvis_xy)
+        progress = self.prev_dist - dist_to_goal if self.prev_dist is not None else 0.0
+        self.prev_dist = dist_to_goal
 
-        # Reward: negative distance plus small velocity alignment toward goal
-        vel_xy = self.state_3lp[8:10]
-        goal_dir = (self.goal_world - pelvis_xy)
-        goal_dir_norm = np.linalg.norm(goal_dir) + 1e-6
-        goal_dir_unit = goal_dir / goal_dir_norm
-        vel_toward_goal = float(np.dot(vel_xy, goal_dir_unit))
-        reward = -dist_to_goal + 0.01 * vel_toward_goal
+        w = self.reward_weights
+        action_pen = w["action"] * float(np.dot(self.prev_action, self.prev_action))
+        reward = w["progress"] * progress + w["alive"] - action_pen
 
         # Termination conditions
         reached = dist_to_goal < self.goal_radius
@@ -166,11 +186,22 @@ class ThreeLPGotoGoalEnv(gym.Env):
         terminated = reached or fallen
         truncated = time_limit and not terminated
 
+        if terminated:
+            reward += w["success"] if reached else w["fail"]
+
         info = {
             "dist_to_goal": dist_to_goal,
             "reached_goal": reached,
             "fallen": fallen,
         }
+        if self.debug_log:
+            info.update(
+                {
+                    "progress": progress,
+                    "pos_norm": np.linalg.norm(self.state_3lp[:6]),
+                    "vel_norm": np.linalg.norm(self.state_3lp[6:]),
+                }
+            )
 
         return reward, terminated, truncated, info
 
@@ -187,14 +218,24 @@ class ThreeLPGotoGoalEnv(gym.Env):
         self.goal_world = self._sample_goal()
 
         if self.sim is not None:
-            self.state_3lp = self.sim.reset().astype(np.float32)
+            if ThreeLPSimCpp is not None and isinstance(self.sim, ThreeLPSimCpp):
+                state0 = ThreeLPStateCpp()
+                state0.q = [0.0] * 12
+                self.sim.reset(state0, 1)
+                support = self.sim.support_sign
+                self.state_3lp = np.array(self.sim.get_state().q, dtype=np.float32)
+                phase_dur = getattr(self.sim, "t_ds", self.step_time)
+            else:
+                self.state_3lp = self.sim.reset().astype(np.float32)
+                support = getattr(self.sim, "support_sign", 1.0)
+                phase_dur = getattr(self.sim, "t_ds", self.step_time / 2)
             self.sim_info = {
                 "phase": "ds",
                 "phase_time": 0.0,
-                "phase_duration": getattr(self.sim, "t_ds", self.step_time / 2),
-                "support_sign": self.sim.support_sign,
+                "phase_duration": phase_dur,
+                "support_sign": support,
                 "fallen": False,
-                "dt": self.sim.dt,
+                "dt": self.dt,
             }
         else:
             # Fallback placeholder
@@ -203,6 +244,9 @@ class ThreeLPGotoGoalEnv(gym.Env):
 
         obs = self._compute_observation()
         info = {"goal_world": self.goal_world.copy()}
+        pelvis_xy = self._get_pelvis_pos(self.state_3lp)
+        self.prev_dist = float(np.linalg.norm(self.goal_world - pelvis_xy))
+        self.prev_action = np.zeros(self.action_dim, dtype=np.float32)
         return obs, info
 
     def step(self, action: np.ndarray):
@@ -210,8 +254,18 @@ class ThreeLPGotoGoalEnv(gym.Env):
         action = np.clip(action, -self.max_action, self.max_action)
 
         if self.sim is not None:
-            self.state_3lp, self.sim_info = self.sim.step(action)
-            self.phase_time = float(self.sim_info.get("phase_time", self.phase_time + self.dt))
+            if ThreeLPSimCpp is not None and isinstance(self.sim, ThreeLPSimCpp):
+                state_struct, info = self.sim.step_dt(action.tolist(), float(self.dt))
+                self.state_3lp = np.array(state_struct.q, dtype=np.float32)
+                self.sim_info = {
+                    "phase_time": info.get("phase_time", 0.0),
+                    "phase_duration": info.get("phase_duration", self.step_time),
+                    "support_sign": info.get("support_sign", 1.0),
+                    "fallen": info.get("fallen", False),
+                }
+            else:
+                self.state_3lp, self.sim_info = self.sim.step(action)
+                self.phase_time = float(self.sim_info.get("phase_time", self.phase_time + self.dt))
         else:
             # Placeholder if no simulator is wired
             self.state_3lp = self.state_3lp + 0.0 * action
@@ -222,6 +276,7 @@ class ThreeLPGotoGoalEnv(gym.Env):
         obs = self._compute_observation()
         reward, terminated, truncated, info = self._compute_reward_and_done(obs)
         info.update(self.sim_info)
+        self.prev_action = action.copy()
 
         return obs, reward, terminated, truncated, info
 

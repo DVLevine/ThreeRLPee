@@ -4,10 +4,13 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="1a8e2bf6-3b61-46bf-9584-cf1449945024" name="Changes" comment="Added CLI commands, and prepared for initial walking test!">
+    <list default="true" id="1a8e2bf6-3b61-46bf-9584-cf1449945024" name="Changes" comment="Fixed dependencies for C++ visualizer, added vel RL scenario. Need to fix camera a bit for demo vis.">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/env_3lp.py" beforeDir="false" afterPath="$PROJECT_DIR$/env_3lp.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/env_goal_walk.py" beforeDir="false" afterPath="$PROJECT_DIR$/env_goal_walk.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/policy_3lp.py" beforeDir="false" afterPath="$PROJECT_DIR$/policy_3lp.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_env.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_env.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/threelp.cpython-310-x86_64-linux-gnu.so" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/train_3lp_ac.py" beforeDir="false" afterPath="$PROJECT_DIR$/train_3lp_ac.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -28,45 +31,45 @@
         <entry key="$PROJECT_DIR$/ThreeLPee" value="funkyStrideMap" />
       </map>
     </option>
-    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$/ThreeLPee" />
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
-  "lastFilter": {
-    "state": "OPEN",
-    "assignee": "DVLevine"
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;DVLevine&quot;
   }
-}]]></component>
-  <component name="GithubPullRequestsUISettings"><![CDATA[{
-  "selectedUrlAndAccountId": {
-    "url": "git@github.com:DVLevine/ThreeLPee.git",
-    "accountId": "791fda49-d938-430b-986b-5a2b67e85704"
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;git@github.com:DVLevine/ThreeLPee.git&quot;,
+    &quot;accountId&quot;: &quot;791fda49-d938-430b-986b-5a2b67e85704&quot;
   }
-}]]></component>
-  <component name="ProjectColorInfo"><![CDATA[{
-  "associatedIndex": 1
-}]]></component>
+}</component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 1
+}</component>
   <component name="ProjectId" id="35xmEUkyTLU4tBLj5XXTYaGmKZA" />
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "ModuleVcsDetector.initialDetectionPerformed": "true",
-    "Python.train_3lp_ac.executor": "Run",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "git-widget-placeholder": "PyBindForRL",
-    "last_opened_file_path": "/home/d-line/PyCharmMiscProject",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;Python.train_3lp_ac.executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/home/d-line/PyCharmMiscProject&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
@@ -82,7 +85,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1764059985891</updated>
-      <workItem from="1764059986984" duration="15957000" />
+      <workItem from="1764059986984" duration="28403000" />
     </task>
     <task id="LOCAL-00001" summary="Updating the project to have the three_lp dynamics native in python">
       <option name="closed" value="true" />
@@ -148,7 +151,31 @@
       <option name="project" value="LOCAL" />
       <updated>1764491476988</updated>
     </task>
-    <option name="localTasksCounter" value="9" />
+    <task id="LOCAL-00009" summary="Correction to module loading.">
+      <option name="closed" value="true" />
+      <created>1764491607726</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1764491607726</updated>
+    </task>
+    <task id="LOCAL-00010" summary="Added include to visualizer_app.hpp for pybind visual.">
+      <option name="closed" value="true" />
+      <created>1764534879531</created>
+      <option name="number" value="00010" />
+      <option name="presentableId" value="LOCAL-00010" />
+      <option name="project" value="LOCAL" />
+      <updated>1764534879531</updated>
+    </task>
+    <task id="LOCAL-00011" summary="Fixed dependencies for C++ visualizer, added vel RL scenario. Need to fix camera a bit for demo vis.">
+      <option name="closed" value="true" />
+      <created>1764536383061</created>
+      <option name="number" value="00011" />
+      <option name="presentableId" value="LOCAL-00011" />
+      <option name="project" value="LOCAL" />
+      <updated>1764536383061</updated>
+    </task>
+    <option name="localTasksCounter" value="12" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -174,7 +201,10 @@
     <MESSAGE value="Added rough draft of linear basis functions and other details." />
     <MESSAGE value="Further dev - preparing new full environment and setup for RL training." />
     <MESSAGE value="Added CLI commands, and prepared for initial walking test!" />
-    <option name="LAST_COMMIT_MESSAGE" value="Added CLI commands, and prepared for initial walking test!" />
+    <MESSAGE value="Correction to module loading." />
+    <MESSAGE value="Added include to visualizer_app.hpp for pybind visual." />
+    <MESSAGE value="Fixed dependencies for C++ visualizer, added vel RL scenario. Need to fix camera a bit for demo vis." />
+    <option name="LAST_COMMIT_MESSAGE" value="Fixed dependencies for C++ visualizer, added vel RL scenario. Need to fix camera a bit for demo vis." />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/ThreeRLPee$train_3lp_ac.coverage" NAME="train_3lp_ac Coverage Results" MODIFIED="1764061027777" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />

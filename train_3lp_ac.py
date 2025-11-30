@@ -158,6 +158,7 @@ def train(
     entropy_coef: float = 0.01,
     value_coef: float = 0.5,
     total_iterations: int = 1000,
+    debug_env: bool = False,
 ):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -165,17 +166,21 @@ def train(
     if env_type == "goal_walk":
         from env_goal_walk import ThreeLPGoalWalkEnv  # lazy import to avoid pybind conflicts
 
-        env = ThreeLPGoalWalkEnv()
+        env = ThreeLPGoalWalkEnv(debug_log=debug_env)
+    elif env_type == "vel_walk":
+        from env_vel_walk import ThreeLPVelWalkEnv
+
+        env = ThreeLPVelWalkEnv()
     else:
         from env_3lp import ThreeLPGotoGoalEnv  # lazy import
 
-        env = ThreeLPGotoGoalEnv(use_python_sim=False)
+        env = ThreeLPGotoGoalEnv(use_python_sim=False, debug_log=debug_env)
 
     # --- Build policy & critic ---
     obs_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
     basis_dim = 64  # legacy MLP basis placeholder
-    encoder_type = "goal_walk" if env_type == "goal_walk" else "raw"
+    encoder_type = "goal_walk" if env_type == "goal_walk" else ("vel_walk" if env_type == "vel_walk" else "raw")
 
     cfg = PolicyConfig(
         obs_dim=obs_dim,
@@ -188,6 +193,7 @@ def train(
 
     if policy_type == "linear":
         actor = LinearBasisActor(cfg).to(device)
+        # Use QuadraticCritic for basis encoders; for vel_walk the critic features are built inside the encoder.
         critic = QuadraticCritic(basis_dim=cfg.critic_basis_dim).to(device)
     elif policy_type == "mlp":
         actor = MLPActor(cfg).to(device)
@@ -303,13 +309,14 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Train 3LP policy with PPO-style updates.")
     parser.add_argument("--policy-type", choices=["linear", "mlp"], default="linear")
-    parser.add_argument("--env-type", choices=["goto_goal", "goal_walk"], default="goto_goal")
+    parser.add_argument("--env-type", choices=["goto_goal", "goal_walk", "vel_walk"], default="goto_goal")
     parser.add_argument("--ppo-epochs", type=int, default=10)
     parser.add_argument("--minibatch-size", type=int, default=256)
     parser.add_argument("--clip-eps", type=float, default=0.2)
     parser.add_argument("--entropy-coef", type=float, default=0.01)
     parser.add_argument("--value-coef", type=float, default=0.5)
     parser.add_argument("--iterations", type=int, default=1000)
+    parser.add_argument("--debug-env", action="store_true")
     args = parser.parse_args()
 
     train(
@@ -321,4 +328,5 @@ if __name__ == "__main__":
         entropy_coef=args.entropy_coef,
         value_coef=args.value_coef,
         total_iterations=args.iterations,
+        debug_env=args.debug_env,
     )
