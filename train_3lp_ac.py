@@ -149,6 +149,107 @@ def collect_rollout(env, actor, critic, horizon=2048, gamma=0.99, lam=0.95, devi
     return batch
 
 
+def maybe_visualize(env, actor, device="cpu", max_steps=200, loop=False):
+    """
+    Synchronous visualization: blocks until window is closed.
+    """
+    try:
+        import threelp
+    except Exception:
+        return
+    if not hasattr(threelp, "visualize_trajectory"):
+        return
+    if not hasattr(env, "sim"):
+        return
+    sim = env.sim
+    if not isinstance(sim, threelp.ThreeLPSim):
+        return
+
+    states = []
+    # Capture current sim state
+    states.append(sim.get_state())
+    obs, _ = env.reset()
+    obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+    for _ in range(max_steps):
+        with torch.no_grad():
+            mean, log_std = actor(obs_t)
+            action = mean  # deterministic mean
+            # Clip to action space
+            if env.action_space is not None:
+                low = torch.as_tensor(env.action_space.low, device=action.device)
+                high = torch.as_tensor(env.action_space.high, device=action.device)
+                action = torch.max(torch.min(action, high), low)
+        action_np = action.squeeze(0).cpu().numpy()
+        obs, reward, done, trunc, info = env.step(action_np)
+        states.append(sim.get_state())
+        if done or trunc:
+            break
+        obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+
+    try:
+        threelp.visualize_trajectory(states, sim.t_ds, sim.t_ss, sim.get_params(), fps=60.0, loop=loop)
+    except Exception:
+        pass
+
+
+def maybe_visualize_async(env, actor, device="cpu", max_steps=200, loop=False):
+    """
+    Fire-and-forget visualization in a child process to avoid blocking training.
+    Converts states to plain lists for pickling; reconstructs in the child.
+    """
+    try:
+        import multiprocessing as mp
+        import threelp
+    except Exception:
+        return
+    if not hasattr(threelp, "visualize_trajectory"):
+        return
+    if not hasattr(env, "sim"):
+        return
+    sim = env.sim
+    if not isinstance(sim, threelp.ThreeLPSim):
+        return
+
+    # Rollout policy deterministically
+    states = []
+    states.append([float(v) for v in sim.get_state().q])
+    obs, _ = env.reset()
+    obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+    for _ in range(max_steps):
+        with torch.no_grad():
+            mean, _ = actor(obs_t)
+            action = mean
+            if env.action_space is not None:
+                low = torch.as_tensor(env.action_space.low, device=action.device)
+                high = torch.as_tensor(env.action_space.high, device=action.device)
+                action = torch.max(torch.min(action, high), low)
+        obs, reward, done, trunc, info = env.step(action.squeeze(0).cpu().numpy())
+        states.append([float(v) for v in env.sim.get_state().q])
+        if done or trunc:
+            break
+        obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+
+    t_ds = sim.t_ds
+    t_ss = sim.t_ss
+    params = sim.get_params()
+
+    def _worker(state_lists, t_ds_val, t_ss_val, params_obj, loop_flag):
+        try:
+            import threelp as tlp
+            state_objs = []
+            for q in state_lists:
+                s = tlp.ThreeLPState()
+                s.q = q
+                state_objs.append(s)
+            tlp.visualize_trajectory(state_objs, t_ds_val, t_ss_val, params_obj, fps=60.0, loop=loop_flag)
+        except Exception:
+            pass
+
+    p = mp.Process(target=_worker, args=(states, t_ds, t_ss, params, loop))
+    p.daemon = True
+    p.start()
+
+
 def train(
     policy_type: str = "linear",
     env_type: str = "goto_goal",
@@ -159,6 +260,9 @@ def train(
     value_coef: float = 0.5,
     total_iterations: int = 1000,
     debug_env: bool = False,
+    viz_every: int = 0,
+    viz_loop: bool = False,
+    viz_async: bool = False,
 ):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -182,18 +286,26 @@ def train(
     basis_dim = 64  # legacy MLP basis placeholder
     encoder_type = "goal_walk" if env_type == "goal_walk" else ("vel_walk" if env_type == "vel_walk" else "raw")
 
+    actor_basis_dim = 15
+    critic_basis_dim = 22
+    if env_type == "goal_walk":
+        actor_basis_dim = 15
+        critic_basis_dim = 22
+    elif env_type == "vel_walk":
+        actor_basis_dim = 16
+        critic_basis_dim = 45
+
     cfg = PolicyConfig(
         obs_dim=obs_dim,
         action_dim=action_dim,
         basis_dim=basis_dim,
         encoder_type=encoder_type,
-        actor_basis_dim=15 if env_type == "goal_walk" else 15,
-        critic_basis_dim=22 if env_type == "goal_walk" else 22,
+        actor_basis_dim=actor_basis_dim,
+        critic_basis_dim=critic_basis_dim,
     )
 
     if policy_type == "linear":
         actor = LinearBasisActor(cfg).to(device)
-        # Use QuadraticCritic for basis encoders; for vel_walk the critic features are built inside the encoder.
         critic = QuadraticCritic(basis_dim=cfg.critic_basis_dim).to(device)
     elif policy_type == "mlp":
         actor = MLPActor(cfg).to(device)
@@ -302,6 +414,11 @@ def train(
                 f"R_ep {avg_ep_rew:.3f} | "
                 f"len {avg_ep_len:.1f}"
             )
+        if viz_every > 0 and iteration > 0 and iteration % viz_every == 0:
+            if viz_async:
+                maybe_visualize_async(env, actor, device=device, max_steps=200, loop=viz_loop)
+            else:
+                maybe_visualize(env, actor, device=device, max_steps=200, loop=viz_loop)
 
 
 if __name__ == "__main__":
@@ -317,6 +434,9 @@ if __name__ == "__main__":
     parser.add_argument("--value-coef", type=float, default=0.5)
     parser.add_argument("--iterations", type=int, default=1000)
     parser.add_argument("--debug-env", action="store_true")
+    parser.add_argument("--viz-every", type=int, default=0, help="If >0 and visualize_trajectory is available, render a rollout every N iterations.")
+    parser.add_argument("--viz-loop", action="store_true", help="Keep the visualizer window open and replay when visualizing.")
+    parser.add_argument("--viz-async", action="store_true", help="Run visualization in a background process to avoid blocking training.")
     args = parser.parse_args()
 
     train(
@@ -329,4 +449,7 @@ if __name__ == "__main__":
         value_coef=args.value_coef,
         total_iterations=args.iterations,
         debug_env=args.debug_env,
+        viz_every=args.viz_every,
+        viz_loop=args.viz_loop,
+        viz_async=args.viz_async,
     )
