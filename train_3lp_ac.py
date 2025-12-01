@@ -1,4 +1,11 @@
 # train_3lp_ac.py
+import atexit
+import multiprocessing as mp
+import queue
+
+import json
+import os
+from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
@@ -149,72 +156,58 @@ def collect_rollout(env, actor, critic, horizon=2048, gamma=0.99, lam=0.95, devi
     return batch
 
 
-def maybe_visualize(env, actor, device="cpu", max_steps=200, loop=False):
-    """
-    Synchronous visualization: blocks until window is closed.
-    """
+def _make_env(env_type: str, debug_env: bool = False):
+    if env_type == "goal_walk":
+        from env_goal_walk import ThreeLPGoalWalkEnv  # lazy import to avoid pybind conflicts
+
+        return ThreeLPGoalWalkEnv(debug_log=debug_env)
+    elif env_type == "vel_walk":
+        from env_vel_walk import ThreeLPVelWalkEnv
+
+        return ThreeLPVelWalkEnv()
+    else:
+        from env_3lp import ThreeLPGotoGoalEnv  # lazy import
+
+        return ThreeLPGotoGoalEnv(use_python_sim=False, debug_log=debug_env)
+
+
+def _rollout_states(
+    env,
+    actor,
+    device="cpu",
+    max_steps=200,
+    dense_stride=False,
+    n_substeps=120,
+    log_prefix="viz",
+    override_params=None,
+    override_phase_times=None,
+):
     try:
         import threelp
     except Exception:
-        return
-    if not hasattr(threelp, "visualize_trajectory"):
-        return
-    if not hasattr(env, "sim"):
-        return
+        threelp = None
     sim = env.sim
-    if not isinstance(sim, threelp.ThreeLPSim):
-        return
-
     states = []
-    # Capture current sim state
-    states.append(sim.get_state())
     obs, _ = env.reset()
+    sim = env.sim  # refresh in case reset recreated the sim
+    states.append(sim.get_state() if not dense_stride else [float(v) for v in sim.get_state().q])
+    if override_params is not None and hasattr(env, "sim") and env.sim is not None:
+        try:
+            env.sim.set_params(override_params)
+        except Exception:
+            pass
+    if override_phase_times is not None and hasattr(env, "sim") and env.sim is not None:
+        try:
+            env.sim.set_phase_times(override_phase_times[0], override_phase_times[1])
+        except Exception:
+            pass
     obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
-    for _ in range(max_steps):
-        with torch.no_grad():
-            mean, log_std = actor(obs_t)
-            action = mean  # deterministic mean
-            # Clip to action space
-            if env.action_space is not None:
-                low = torch.as_tensor(env.action_space.low, device=action.device)
-                high = torch.as_tensor(env.action_space.high, device=action.device)
-                action = torch.max(torch.min(action, high), low)
-        action_np = action.squeeze(0).cpu().numpy()
-        obs, reward, done, trunc, info = env.step(action_np)
-        states.append(sim.get_state())
-        if done or trunc:
-            break
-        obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
-
-    try:
-        threelp.visualize_trajectory(states, sim.t_ds, sim.t_ss, sim.get_params(), fps=60.0, loop=loop)
-    except Exception:
-        pass
-
-
-def maybe_visualize_async(env, actor, device="cpu", max_steps=200, loop=False):
-    """
-    Fire-and-forget visualization in a child process to avoid blocking training.
-    Converts states to plain lists for pickling; reconstructs in the child.
-    """
-    try:
-        import multiprocessing as mp
-        import threelp
-    except Exception:
-        return
-    if not hasattr(threelp, "visualize_trajectory"):
-        return
-    if not hasattr(env, "sim"):
-        return
-    sim = env.sim
-    if not isinstance(sim, threelp.ThreeLPSim):
-        return
-
-    # Rollout policy deterministically
-    states = []
-    states.append([float(v) for v in sim.get_state().q])
-    obs, _ = env.reset()
-    obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+    leg = sim.support_sign if hasattr(sim, "support_sign") else 1
+    have_dense_foot = dense_stride and threelp is not None and hasattr(threelp, "simulate_stride_with_foot_offset")
+    have_dense_inputs = dense_stride and threelp is not None and hasattr(threelp, "simulate_stride_with_inputs")
+    if dense_stride and not (have_dense_foot or have_dense_inputs):
+        print(f"[{log_prefix}] dense_stride requested but no dense samplers available; falling back to step states.")
+        have_dense_foot = have_dense_inputs = False
     for _ in range(max_steps):
         with torch.no_grad():
             mean, _ = actor(obs_t)
@@ -223,31 +216,362 @@ def maybe_visualize_async(env, actor, device="cpu", max_steps=200, loop=False):
                 low = torch.as_tensor(env.action_space.low, device=action.device)
                 high = torch.as_tensor(env.action_space.high, device=action.device)
                 action = torch.max(torch.min(action, high), low)
-        obs, reward, done, trunc, info = env.step(action.squeeze(0).cpu().numpy())
-        states.append([float(v) for v in env.sim.get_state().q])
+        action_np = action.squeeze(0).cpu().numpy()
+        use_dense_foot = have_dense_foot and action_np.shape[0] == 2
+        use_dense_inputs = have_dense_inputs and action_np.shape[0] == 8
+        if use_dense_foot:
+            seg = threelp.simulate_stride_with_foot_offset(sim.get_state(), leg, action_np.tolist(), sim.t_ds, sim.t_ss, sim.get_params(), n_substeps)
+            for s in seg:
+                states.append(s if not dense_stride else [float(v) for v in s.q])
+        elif use_dense_inputs:
+            seg = threelp.simulate_stride_with_inputs(sim.get_state(), leg, action_np.tolist(), sim.t_ds, sim.t_ss, sim.get_params(), n_substeps)
+            for s in seg:
+                states.append(s if not dense_stride else [float(v) for v in s.q])
+        obs, reward, done, trunc, info = env.step(action_np)
+        leg = sim.support_sign if hasattr(sim, "support_sign") else leg
+        if not (use_dense_foot or use_dense_inputs):
+            states.append(sim.get_state() if not dense_stride else [float(v) for v in sim.get_state().q])
         if done or trunc:
             break
         obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+    return states
 
-    t_ds = sim.t_ds
-    t_ss = sim.t_ss
-    params = sim.get_params()
 
-    def _worker(state_lists, t_ds_val, t_ss_val, params_obj, loop_flag):
-        try:
-            import threelp as tlp
+def maybe_visualize(env, actor, device="cpu", max_steps=200, loop=False, dense_stride=False, n_substeps=120, log_prefix="viz"):
+    """
+    Synchronous visualization: blocks until window is closed.
+    """
+    threelp_mod = None
+    try:
+        import threelp as tlp
+
+        threelp_mod = tlp
+    except Exception as e:
+        print(f"[{log_prefix}] skip: threelp import failed ({e})")
+    if threelp_mod is None or not hasattr(threelp_mod, "visualize_trajectory"):
+        print(f"[{log_prefix}] skip: no visualize_trajectory available")
+        return
+    if not hasattr(env, "sim"):
+        print(f"[{log_prefix}] skip: env has no sim")
+        return
+    sim = env.sim
+    if sim is None:
+        print(f"[{log_prefix}] skip: sim is None")
+        return
+
+    states = _rollout_states(env, actor, device=device, max_steps=max_steps, dense_stride=dense_stride, n_substeps=n_substeps, log_prefix=log_prefix)
+    try:
+        if dense_stride:
+            # reconstruct state objs
             state_objs = []
-            for q in state_lists:
-                s = tlp.ThreeLPState()
+            for q in states:
+                s = threelp_mod.ThreeLPState()
                 s.q = q
                 state_objs.append(s)
-            tlp.visualize_trajectory(state_objs, t_ds_val, t_ss_val, params_obj, fps=60.0, loop=loop_flag)
-        except Exception:
+            states_use = state_objs
+        else:
+            states_use = states
+        print(f"[{log_prefix}] visualize with {len(states_use)} states, dense={dense_stride}")
+        threelp_mod.visualize_trajectory(states_use, sim.t_ds, sim.t_ss, sim.get_params(), fps=60.0, loop=loop)
+    except Exception as e:
+        print(f"[{log_prefix}] visualize_trajectory error: {e}")
+
+
+def _params_to_tuple(params):
+    return (
+        float(params.h1),
+        float(params.h2),
+        float(params.h3),
+        float(params.wP),
+        float(params.m1),
+        float(params.m2),
+        float(params.g),
+    )
+
+
+def _save_checkpoint(save_dir: Path, actor, critic, cfg, env_type: str, params_tuple, t_ds, t_ss, iteration: int, extra: dict | None = None):
+    save_dir.mkdir(parents=True, exist_ok=True)
+    ckpt = {
+        "actor_state": actor.state_dict(),
+        "critic_state": critic.state_dict(),
+        "config": {
+            "obs_dim": cfg.obs_dim,
+            "action_dim": cfg.action_dim,
+            "basis_dim": cfg.basis_dim,
+            "encoder_type": cfg.encoder_type,
+            "actor_basis_dim": cfg.actor_basis_dim,
+            "critic_basis_dim": cfg.critic_basis_dim,
+            "log_std_init": cfg.log_std_init,
+            "hidden_sizes": list(cfg.hidden_sizes),
+        },
+        "env_type": env_type,
+        "params": params_tuple,
+        "t_ds": t_ds,
+        "t_ss": t_ss,
+        "iteration": iteration,
+    }
+    if extra:
+        ckpt["extra"] = extra
+    torch.save(ckpt, save_dir / "checkpoint.pt")
+    meta = {
+        "iteration": iteration,
+        "env_type": env_type,
+        "t_ds": t_ds,
+        "t_ss": t_ss,
+        "params": params_tuple,
+    }
+    (save_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+
+
+def _render_job(job):
+    try:
+        import threelp as tlp
+        from policy_3lp import PolicyConfig, LinearBasisActor, MLPActor
+    except Exception as e:
+        print(f"[viz] render import error: {e}", flush=True)
+        return
+
+    try:
+        env_type = job["env_type"]
+        policy_type = job["policy_type"]
+        cfg_dict = job["cfg"]
+        state_dict = job["state_dict"]
+        loop_flag = job["loop"]
+        max_steps = job["max_steps"]
+        dense_stride = job["dense_stride"]
+        n_substeps = job["n_substeps"]
+        t_ds_val = job["t_ds"]
+        t_ss_val = job["t_ss"]
+        params_tuple = job["params"]
+        debug_env = job.get("debug_env", False)
+    except Exception as e:
+        print(f"[viz] render invalid job: {e}", flush=True)
+        return
+
+    def _tuple_to_params(p_tuple):
+        p = tlp.ThreeLPParams()
+        p.h1, p.h2, p.h3, p.wP, p.m1, p.m2, p.g = p_tuple
+        return p
+
+    try:
+        env = _make_env(env_type, debug_env=debug_env)
+    except Exception as e:
+        print(f"[viz] render failed to build env ({env_type}): {e}", flush=True)
+        return
+
+    cfg_dict = dict(cfg_dict)
+    if "hidden_sizes" in cfg_dict:
+        cfg_dict["hidden_sizes"] = tuple(cfg_dict["hidden_sizes"])
+    try:
+        cfg = PolicyConfig(**cfg_dict)
+    except Exception as e:
+        print(f"[viz] render failed to rebuild config: {e}", flush=True)
+        return
+
+    try:
+        if policy_type == "linear":
+            actor = LinearBasisActor(cfg).to("cpu")
+        elif policy_type == "mlp":
+            actor = MLPActor(cfg).to("cpu")
+        else:
+            print(f"[viz] render: unknown policy_type {policy_type}", flush=True)
+            return
+        actor.load_state_dict(state_dict, strict=True)
+    except Exception as e:
+        print(f"[viz] render failed to rebuild actor: {e}", flush=True)
+        return
+
+    try:
+        state_lists = _rollout_states(
+            env,
+            actor,
+            device="cpu",
+            max_steps=max_steps,
+            dense_stride=dense_stride,
+            n_substeps=n_substeps,
+            log_prefix="viz",
+            override_params=_tuple_to_params(params_tuple),
+            override_phase_times=(t_ds_val, t_ss_val),
+        )
+    except Exception as e:
+        print(f"[viz] render rollout error: {e}", flush=True)
+        return
+
+    try:
+        state_objs = []
+        for q in state_lists:
+            s = tlp.ThreeLPState()
+            s.q = q if not hasattr(q, "q") else q.q
+            state_objs.append(s)
+        params_obj = _tuple_to_params(params_tuple)
+        tlp.visualize_trajectory(
+            state_objs,
+            t_ds_val,
+            t_ss_val,
+            params_obj,
+            fps=60.0,
+            loop=loop_flag,
+            wait_for_close=loop_flag,
+        )
+    except Exception as e:
+        print(f"[viz] render visualize error: {e}", flush=True)
+
+
+def _viz_worker(job_queue):
+    try:
+        import multiprocessing as mp_local
+    except Exception as e:
+        print(f"[viz] worker import error: {e}", flush=True)
+        return
+
+    render_proc = None
+    ctx = mp_local.get_context("spawn")
+    while True:
+        try:
+            job = job_queue.get(timeout=0.5)
+        except queue.Empty:
+            continue
+        except (EOFError, OSError, FileNotFoundError):
+            break
+        if job is None:
+            if render_proc is not None and render_proc.is_alive():
+                render_proc.terminate()
+                render_proc.join(timeout=2.0)
+            break
+        if render_proc is not None and render_proc.is_alive():
+            render_proc.terminate()
+            render_proc.join(timeout=2.0)
+        render_proc = ctx.Process(target=_render_job, args=(job,))
+        render_proc.daemon = True
+        render_proc.start()
+
+
+class _VizProcessManager:
+    def __init__(self):
+        self._ctx = mp.get_context("spawn")
+        self._proc = None
+        self._queue = None
+
+    def _start(self):
+        if self._proc is not None and self._proc.is_alive():
+            return
+        self._queue = self._ctx.Queue(maxsize=1)
+        self._proc = self._ctx.Process(target=_viz_worker, args=(self._queue,))
+        # Keep this non-daemonic so it can spawn a render subprocess.
+        self._proc.daemon = False
+        self._proc.start()
+
+    def submit(self, job):
+        self._start()
+        if self._queue is None:
+            return
+        try:
+            while True:
+                self._queue.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            self._queue.put_nowait(job)
+        except queue.Full:
             pass
 
-    p = mp.Process(target=_worker, args=(states, t_ds, t_ss, params, loop))
-    p.daemon = True
-    p.start()
+    def stop(self):
+        if self._proc is None:
+            return
+        if self._proc.is_alive():
+            if self._queue is not None:
+                try:
+                    self._queue.put_nowait(None)
+                except queue.Full:
+                    pass
+                except Exception:
+                    pass
+            self._proc.join(timeout=2.0)
+            if self._proc.is_alive():
+                self._proc.terminate()
+                self._proc.join(timeout=1.0)
+        self._proc = None
+        self._queue = None
+
+
+_viz_manager = None
+
+
+def _get_viz_manager():
+    global _viz_manager
+    if _viz_manager is None:
+        _viz_manager = _VizProcessManager()
+        atexit.register(_viz_manager.stop)
+    return _viz_manager
+
+
+def maybe_visualize_async(
+    env,
+    actor,
+    cfg,
+    policy_type,
+    env_type,
+    device="cpu",
+    max_steps=200,
+    loop=False,
+    dense_stride=False,
+    n_substeps=120,
+    log_prefix="viz",
+    debug_env=False,
+):
+    """
+    Fire-and-forget visualization in a child process to avoid blocking training.
+    The worker reconstructs the env+actor and runs the rollout there, so the
+    trainer never pauses. Uses a singleton worker process + queue so only one
+    window is active; drops stale requests if training triggers a new
+    visualization before the last finishes.
+    """
+    try:
+        import threelp
+    except Exception as e:
+        print(f"[{log_prefix}] skip async: import error {e}")
+        return
+    if not hasattr(threelp, "visualize_trajectory"):
+        print(f"[{log_prefix}] skip async: no visualize_trajectory")
+        return
+    if not hasattr(env, "sim"):
+        print(f"[{log_prefix}] skip async: env has no sim")
+        return
+    sim = env.sim
+    if not isinstance(sim, threelp.ThreeLPSim):
+        print(f"[{log_prefix}] skip async: sim not threelp.ThreeLPSim")
+        return
+
+    # Snapshot actor weights to CPU to keep trainer device untouched.
+    state_dict_cpu = {k: v.detach().cpu() for k, v in actor.state_dict().items()}
+    cfg_payload = {
+        "obs_dim": cfg.obs_dim,
+        "action_dim": cfg.action_dim,
+        "basis_dim": cfg.basis_dim,
+        "encoder_type": cfg.encoder_type,
+        "actor_basis_dim": cfg.actor_basis_dim,
+        "critic_basis_dim": cfg.critic_basis_dim,
+        "log_std_init": cfg.log_std_init,
+        "hidden_sizes": tuple(cfg.hidden_sizes),
+    }
+
+    job = {
+        "env_type": env_type,
+        "policy_type": policy_type,
+        "cfg": cfg_payload,
+        "state_dict": state_dict_cpu,
+        "t_ds": sim.t_ds,
+        "t_ss": sim.t_ss,
+        "params": _params_to_tuple(sim.get_params()),
+        "loop": loop,
+        "max_steps": max_steps,
+        "dense_stride": dense_stride,
+        "n_substeps": n_substeps,
+        "debug_env": debug_env,
+    }
+
+    mgr = _get_viz_manager()
+    mgr.submit(job)
 
 
 def train(
@@ -263,22 +587,13 @@ def train(
     viz_every: int = 0,
     viz_loop: bool = False,
     viz_async: bool = False,
+    save_dir: str | None = None,
+    save_interval: int = 0,
 ):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # --- Make environment ---
-    if env_type == "goal_walk":
-        from env_goal_walk import ThreeLPGoalWalkEnv  # lazy import to avoid pybind conflicts
-
-        env = ThreeLPGoalWalkEnv(debug_log=debug_env)
-    elif env_type == "vel_walk":
-        from env_vel_walk import ThreeLPVelWalkEnv
-
-        env = ThreeLPVelWalkEnv()
-    else:
-        from env_3lp import ThreeLPGotoGoalEnv  # lazy import
-
-        env = ThreeLPGotoGoalEnv(use_python_sim=False, debug_log=debug_env)
+    env = _make_env(env_type, debug_env=debug_env)
 
     # --- Build policy & critic ---
     obs_dim = env.observation_space.shape[0]
@@ -319,6 +634,8 @@ def train(
     obs_norm = RunningNorm(shape=(obs_dim,), device=device)
 
     for iteration in range(total_iterations):
+        if iteration == 0 and viz_every > 0:
+            print(f"[viz] enabled: viz_every={viz_every} loop={viz_loop} async={viz_async}")
         batch = collect_rollout(env, actor, critic, horizon=2048, device=device, obs_norm=obs_norm)
 
         obs = batch["obs"].to(device)
@@ -415,10 +732,33 @@ def train(
                 f"len {avg_ep_len:.1f}"
             )
         if viz_every > 0 and iteration > 0 and iteration % viz_every == 0:
-            if viz_async:
-                maybe_visualize_async(env, actor, device=device, max_steps=200, loop=viz_loop)
-            else:
-                maybe_visualize(env, actor, device=device, max_steps=200, loop=viz_loop)
+            # Use dense stride viz when samplers are available (2D or 8D actions).
+            dense_ok = hasattr(env, "action_space") and env.action_space.shape[0] in (2, 8)
+            print(f"[viz] trigger at iter {iteration} | dense={dense_ok} | async={viz_async}")
+            print(f"[viz] sim type: {type(env.sim)}")
+            try:
+                if viz_async:
+                    maybe_visualize_async(
+                        env,
+                        actor,
+                        cfg,
+                        policy_type,
+                        env_type,
+                        device=device,
+                        max_steps=200,
+                        loop=viz_loop,
+                        dense_stride=dense_ok,
+                        debug_env=debug_env,
+                    )
+                else:
+                    maybe_visualize(env, actor, device=device, max_steps=200, loop=viz_loop, dense_stride=dense_ok)
+            except Exception as e:
+                print(f"[viz] error dispatching visualize: {e}")
+
+        if save_dir and ((save_interval > 0 and iteration % save_interval == 0) or iteration == total_iterations - 1):
+            ckpt_dir = Path(save_dir)
+            params_tuple = _params_to_tuple(env.sim.get_params()) if hasattr(env, "sim") and env.sim is not None else None
+            _save_checkpoint(ckpt_dir, actor, critic, cfg, env_type, params_tuple, getattr(env.sim, "t_ds", None), getattr(env.sim, "t_ss", None), iteration)
 
 
 if __name__ == "__main__":
@@ -436,7 +776,9 @@ if __name__ == "__main__":
     parser.add_argument("--debug-env", action="store_true")
     parser.add_argument("--viz-every", type=int, default=0, help="If >0 and visualize_trajectory is available, render a rollout every N iterations.")
     parser.add_argument("--viz-loop", action="store_true", help="Keep the visualizer window open and replay when visualizing.")
-    parser.add_argument("--viz-async", action="store_true", help="Run visualization in a background process to avoid blocking training.")
+    parser.add_argument("--viz-async", type=int, choices=[0, 1], default=0, help="Run visualization in a background process (1) or synchronously (0).")
+    parser.add_argument("--save-dir", type=str, default=None, help="Directory to write checkpoints.")
+    parser.add_argument("--save-interval", type=int, default=0, help="Save a checkpoint every N iterations (and also at the final iteration).")
     args = parser.parse_args()
 
     train(
@@ -451,5 +793,7 @@ if __name__ == "__main__":
         debug_env=args.debug_env,
         viz_every=args.viz_every,
         viz_loop=args.viz_loop,
-        viz_async=args.viz_async,
+        viz_async=bool(args.viz_async),
+        save_dir=args.save_dir,
+        save_interval=args.save_interval,
     )
