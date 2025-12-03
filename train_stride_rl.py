@@ -1,27 +1,32 @@
 """
-Minimal actor–critic loop for the canonical stride-level 3LP environment.
+Canonical stride-level actor–critic training (Phase A) using torch autograd.
 
-Implements the linear Gaussian actor and quadratic-feature critic from the
-specification. One env.step = one stride; the environment already embeds the
-closed-form stride map, so no numerical integration is used inside training.
+Features:
+- Linear Gaussian actor over φ_a = [δx (8), command (1), bias].
+- Fixed diagonal exploration std.
+- Quadratic-monomial critic updated with semi-gradient TD(0).
+- No observation normalization (physics-scale features are required for linear policies).
 """
 import argparse
 import math
 from dataclasses import dataclass
-from pathlib import Path
+from typing import Tuple
 
 import numpy as np
+import torch
+from torch import nn
+from torch.distributions import Normal
 
 from env_canonical_stride import ThreeLPCanonicalStrideEnv
 
 
 def phi_actor(obs: np.ndarray) -> np.ndarray:
-    """Actor features φ_a = [δx (8), c (1), bias]."""
+    """Actor features φ_a = [δx, command, 1]."""
     return np.concatenate([obs.astype(np.float64), np.array([1.0], dtype=np.float64)], axis=0)
 
 
 def phi_critic(z: np.ndarray) -> np.ndarray:
-    """Critic features φ_c = all unique quadratic monomials of z (upper triangle)."""
+    """All unique quadratic monomials of z (upper triangle)."""
     feats = []
     d = z.shape[0]
     for i in range(d):
@@ -30,30 +35,30 @@ def phi_critic(z: np.ndarray) -> np.ndarray:
     return np.asarray(feats, dtype=np.float64)
 
 
-@dataclass
-class LinearGaussianActor:
-    theta: np.ndarray  # (8, d_s)
-    sigma: np.ndarray  # (8,) std dev
+class LinearGaussianActor(nn.Module):
+    """
+    Linear Gaussian policy: a ~ N(theta * phi, diag(sigma^2)), fixed sigma.
+    """
 
-    @classmethod
-    def zeros(cls, d_s: int, init_std: float = 0.5):
-        theta = np.zeros((8, d_s), dtype=np.float64)
-        sigma = np.ones(8, dtype=np.float64) * init_std
-        return cls(theta, sigma)
+    def __init__(self, d_s: int, init_std: float = 0.5):
+        super().__init__()
+        self.theta = nn.Parameter(torch.zeros((8, d_s), dtype=torch.float32))
+        log_std = math.log(init_std)
+        self.register_buffer("log_std", torch.full((8,), float(log_std), dtype=torch.float32))
 
-    def mean(self, z: np.ndarray) -> np.ndarray:
-        return self.theta @ z
+    def forward(self, phi: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        # phi: (..., d_s)
+        mean = torch.matmul(self.theta, phi)
+        return mean, self.log_std
 
-    def sample(self, z: np.ndarray, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
-        mu = self.mean(z)
-        noise = rng.normal(scale=self.sigma, size=mu.shape)
-        return mu + noise, mu
-
-    def grad_log_pi(self, a: np.ndarray, mu: np.ndarray, z: np.ndarray) -> np.ndarray:
-        # Σ^{-1}(a-μ) φᵀ  with diagonal Σ
-        inv_var = 1.0 / (self.sigma ** 2)
-        diff = (a - mu) * inv_var
-        return np.outer(diff, z)
+    def sample(
+        self, phi: torch.Tensor, rng: torch.Generator | None = None
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        mean, log_std = self.forward(phi)
+        std = log_std.exp()
+        noise = torch.randn(mean.shape, device=mean.device, generator=rng) * std
+        action = mean + noise
+        return action, mean, log_std
 
 
 @dataclass
@@ -65,12 +70,10 @@ class QuadraticCritic:
         return cls(np.zeros(d_c, dtype=np.float64))
 
     def value(self, z: np.ndarray) -> float:
-        phi = phi_critic(z)
-        return float(self.w @ phi)
+        return float(self.w @ phi_critic(z))
 
     def update(self, delta: float, z: np.ndarray, alpha_c: float):
-        phi = phi_critic(z)
-        self.w += alpha_c * delta * phi
+        self.w += alpha_c * delta * phi_critic(z)
 
 
 def train(
@@ -82,15 +85,19 @@ def train(
     seed: int | None,
     log_interval: int,
     env_kwargs: dict,
+    resample_command: bool = False,
 ):
-    rng = np.random.default_rng(seed)
-    env = ThreeLPCanonicalStrideEnv(**env_kwargs, seed=seed)
+    rng_np = np.random.default_rng(seed)
+    torch_rng = torch.Generator().manual_seed(seed if seed is not None else 0)
 
+    env = ThreeLPCanonicalStrideEnv(**env_kwargs, seed=seed)
+    env.resample_command_each_step = bool(resample_command)
     obs_dim = env.observation_space.shape[0]
-    d_s = obs_dim + 1  # bias added in phi_actor
+    d_s = obs_dim + 1  # bias
     d_c = d_s * (d_s + 1) // 2
 
-    actor = LinearGaussianActor.zeros(d_s, init_std=init_std)
+    actor = LinearGaussianActor(d_s, init_std=init_std)
+    actor_opt = torch.optim.Adam([actor.theta], lr=alpha_a)
     critic = QuadraticCritic.zeros(d_c)
 
     returns = []
@@ -103,17 +110,29 @@ def train(
         steps = 0
 
         while not (done or trunc):
-            a, mu = actor.sample(z, rng)
-            next_obs, reward, done, trunc, info = env.step(a)
+            # Torch sampling
+            phi_t = torch.tensor(z, dtype=torch.float32)
+            action_t, mean_t, log_std_t = actor.sample(phi_t, rng=torch_rng)
+            action_np = action_t.detach().cpu().numpy()
+
+            next_obs, reward, done, trunc, info = env.step(action_np)
             z_next = phi_actor(next_obs)
 
             v = critic.value(z)
             v_next = 0.0 if done else critic.value(z_next)
             delta = reward + gamma * v_next - v
 
+            # Critic update (semi-gradient)
             critic.update(delta, z, alpha_c)
-            grad_log_pi = actor.grad_log_pi(a, mu, z)
-            actor.theta += alpha_a * delta * grad_log_pi
+
+            # Actor update via autograd
+            actor_opt.zero_grad()
+            std_t = log_std_t.exp()
+            dist = Normal(mean_t, std_t)
+            log_prob = dist.log_prob(action_t).sum()
+            loss = -(torch.tensor(delta, dtype=torch.float32) * log_prob)
+            loss.backward()
+            actor_opt.step()
 
             ep_return += reward
             steps += 1
@@ -122,7 +141,7 @@ def train(
         returns.append(ep_return)
         if (ep + 1) % log_interval == 0:
             avg_ret = np.mean(returns[-log_interval:])
-            print(f"[ep {ep+1}] avg_return({log_interval}) = {avg_ret:.3f}  last_steps={steps}")
+            print(f"[ep {ep+1}] avg_return({log_interval})={avg_ret:.3f} steps={steps}")
     return actor, critic, returns
 
 
@@ -143,6 +162,7 @@ def main():
     parser.add_argument("--reset-noise", type=float, default=0.01)
     parser.add_argument("--failure-threshold", type=float, default=5.0)
     parser.add_argument("--max-steps", type=int, default=200)
+    parser.add_argument("--resample-command", action="store_true", help="Resample command each stride to train transitions")
     args = parser.parse_args()
 
     env_kwargs = dict(
@@ -156,8 +176,7 @@ def main():
         max_steps=args.max_steps,
         debug_log=False,
     )
-
-    train(
+    actor, critic, _ = train(
         episodes=args.episodes,
         gamma=args.gamma,
         alpha_a=args.alpha_a,
@@ -166,6 +185,7 @@ def main():
         seed=args.seed,
         log_interval=args.log_interval,
         env_kwargs=env_kwargs,
+        resample_command=args.resample_command,
     )
 
 

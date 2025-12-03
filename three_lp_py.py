@@ -1,13 +1,21 @@
-import math
-from dataclasses import dataclass
-from typing import Dict, Tuple
+"""
+Deprecated Python 3LP implementation.
 
-import numpy as np
+Use the C++ pybind module `threelp` instead. This file is kept in the repo for
+reference only and will raise at import time to avoid accidental usage.
+"""
+raise RuntimeError("three_lp_py.py is deprecated; import threelp (C++ pybind) instead.")
 
-try:
-    from scipy.linalg import expm as _scipy_expm
+import math  # noqa: F401
+from dataclasses import dataclass  # noqa: F401
+from typing import Dict, Tuple  # noqa: F401
+
+import numpy as np  # noqa: F401
+
+try:  # noqa: F401
+    from scipy.linalg import expm as _scipy_expm  # type: ignore # noqa: F401
 except Exception:  # pragma: no cover - scipy may not be installed
-    _scipy_expm = None
+    _scipy_expm = None  # noqa: F401
 
 
 def _matrix_exponential(mat: np.ndarray) -> np.ndarray:

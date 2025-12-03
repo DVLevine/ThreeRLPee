@@ -89,16 +89,32 @@ class ThreeLPCanonicalStrideEnv(gym.Env):
         self.current: StrideCommandCache | None = None
         self.delta_x = np.zeros(8, dtype=np.float64)
         self.step_count = 0
+        # Command scheduling: optionally resample each stride to train transitions.
+        self.resample_command_each_step = False
+
+        # ZMP safety guard (approximate)
+        self.foot_length = 0.22
+        self.max_cop = 0.5 * self.foot_length
+        self.total_mass = float(self.params.m1 + 2.0 * self.params.m2)
+        self.gravity = float(self.params.g)
+        # Index of sagittal ankle torque in u vector; per spec order:
+        # [Uh_y, Ua_y, Vh_y, Va_y, Uh_x, Ua_x, Vh_x, Va_x]
+        self.ankle_sagittal_idx = 1
+        self.zmp_penalty = 100.0
 
     # --------- Setup helpers ---------
     def _build_command_cache(self):
         self.maps.clear()
         for cmd in self.command_grid:
             res = threelp.build_canonical_stride(float(cmd), self.t_ds, self.t_ss, self.params)
+            A = np.array(res["A"], dtype=np.float64)
+            B = np.array(res["B"], dtype=np.float64)
+            if A.shape != (8, 8) or B.shape != (8, 8):
+                raise ValueError(f"build_canonical_stride returned shapes {A.shape} and {B.shape}, expected (8,8)")
             cache = StrideCommandCache(
                 command=float(cmd),
-                A=np.array(res["A"], dtype=np.float64),
-                B=np.array(res["B"], dtype=np.float64),
+                A=A,
+                B=B,
                 b=np.array(res["b"], dtype=np.float64),
                 x_ref=np.array(res["x_ref"], dtype=np.float64),
                 u_ref=np.array(res["u_ref"], dtype=np.float64),
@@ -136,28 +152,50 @@ class ThreeLPCanonicalStrideEnv(gym.Env):
         assert self.current is not None, "Environment not reset"
         self.step_count += 1
 
+        # Reconstruct absolute state at stride start.
+        x_full_k = self.current.x_ref + self.delta_x
+
+        # Apply action (clipped) and stride map for current command.
         a = np.asarray(action, dtype=np.float64)
         a = np.clip(a, -self.u_limit, self.u_limit)
-        u = self.current.u_ref + a
-        u = np.clip(u, -self.u_limit, self.u_limit)
-        delta_u = u - self.current.u_ref
+        u_applied = self.current.u_ref + a
+        u_applied = np.clip(u_applied, -self.u_limit, self.u_limit)
+        delta_u = u_applied - self.current.u_ref
 
-        x_full = self.current.x_ref + self.delta_x
-        x_next = self.current.A @ x_full + self.current.B @ u + self.current.b
-        delta_x_next = x_next - self.current.x_ref
+        x_full_k1 = self.current.A @ x_full_k + self.current.B @ u_applied + self.current.b
+
+        # Optionally resample command each stride (for command-conditioned training).
+        if self.resample_command_each_step and len(self.maps) > 1:
+            self.current = self._sample_command()
+
+        # Compute new error state against (possibly new) reference.
+        delta_x_next = x_full_k1 - self.current.x_ref
+
+        # ZMP/CoP safety guard using sagittal ankle torque.
+        terminated = False
+        fail_reason = None
+        ankle_idx = self.ankle_sagittal_idx
+        if 0 <= ankle_idx < u_applied.shape[0] and self.total_mass > 0 and self.gravity > 0:
+            cop_x = float(u_applied[ankle_idx]) / (self.total_mass * self.gravity)
+            if abs(cop_x) > self.max_cop:
+                terminated = True
+                fail_reason = "ZMP_violation"
 
         # Reward (negative cost)
         state_cost = float(np.dot(delta_x_next * self.q_x, delta_x_next))
         act_cost = float(np.dot(delta_u * self.r_u, delta_u))
-        # Approx pelvis forward speed from state element 2 (ṗ_x)
-        v_est = float(x_next[2])
+        v_est = float(x_full_k1[2])  # pelvis forward velocity component
         speed_cost = self.q_v * (v_est - self.current.command) ** 2
         cost = state_cost + act_cost + speed_cost
+        if fail_reason == "ZMP_violation":
+            cost += self.zmp_penalty
         reward = -cost
 
-        fail = np.max(np.abs(delta_x_next)) > self.failure_threshold
+        # Failure/termination checks
+        if np.max(np.abs(delta_x_next)) > self.failure_threshold:
+            terminated = True
+            fail_reason = fail_reason or "state_diverged"
         truncated = self.step_count >= self.max_steps
-        terminated = bool(fail)
 
         self.delta_x = delta_x_next
         obs = self._build_obs(self.delta_x, self.current.command)
@@ -169,6 +207,8 @@ class ThreeLPCanonicalStrideEnv(gym.Env):
             "v_est": v_est,
             "command": self.current.command,
         }
+        if fail_reason:
+            info["fail_reason"] = fail_reason
         if self.debug_log:
             info["delta_x_next_norm"] = float(np.linalg.norm(delta_x_next))
         return obs, reward, terminated, truncated, info
