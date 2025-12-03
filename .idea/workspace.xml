@@ -4,10 +4,13 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="1a8e2bf6-3b61-46bf-9584-cf1449945024" name="Changes" comment="Added gait_planner.cpp for pybind.">
-      <change afterPath="$PROJECT_DIR$/train_stride_ppo.py" afterDir="false" />
+    <list default="true" id="1a8e2bf6-3b61-46bf-9584-cf1449945024" name="Changes" comment="Added PPO version, an edited MonteCarlo Actor Critic version, and a visualizer. Will upgrade the visualizer, and the other methods currently don't really work in terms of obtaining the reference trajectory.">
+      <change afterPath="$PROJECT_DIR$/newVizTester.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ThreeLPee/src/three_lp_sim.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/ThreeLPee/src/three_lp_sim.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/env_canonical_stride.py" beforeDir="false" afterPath="$PROJECT_DIR$/env_canonical_stride.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stride_utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/stride_utils.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/train_stride_ppo.py" beforeDir="false" afterPath="$PROJECT_DIR$/train_stride_ppo.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/train_stride_rl.py" beforeDir="false" afterPath="$PROJECT_DIR$/train_stride_rl.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -82,7 +85,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1764059985891</updated>
-      <workItem from="1764059986984" duration="71632000" />
+      <workItem from="1764059986984" duration="81236000" />
     </task>
     <task id="LOCAL-00001" summary="Updating the project to have the three_lp dynamics native in python">
       <option name="closed" value="true" />
@@ -236,7 +239,15 @@
       <option name="project" value="LOCAL" />
       <updated>1764739547640</updated>
     </task>
-    <option name="localTasksCounter" value="20" />
+    <task id="LOCAL-00020" summary="Added PPO version, an edited MonteCarlo Actor Critic version, and a visualizer. Will upgrade the visualizer, and the other methods currently don't really work in terms of obtaining the reference trajectory.">
+      <option name="closed" value="true" />
+      <created>1764742712588</created>
+      <option name="number" value="00020" />
+      <option name="presentableId" value="LOCAL-00020" />
+      <option name="project" value="LOCAL" />
+      <updated>1764742712588</updated>
+    </task>
+    <option name="localTasksCounter" value="21" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -273,7 +284,8 @@
     <MESSAGE value="About to evolve RL to use the new (more carefully designed scenario been working on)" />
     <MESSAGE value="Updates for new designed RL scenario. Smoketesting and debugging." />
     <MESSAGE value="Added gait_planner.cpp for pybind." />
-    <option name="LAST_COMMIT_MESSAGE" value="Added gait_planner.cpp for pybind." />
+    <MESSAGE value="Added PPO version, an edited MonteCarlo Actor Critic version, and a visualizer. Will upgrade the visualizer, and the other methods currently don't really work in terms of obtaining the reference trajectory." />
+    <option name="LAST_COMMIT_MESSAGE" value="Added PPO version, an edited MonteCarlo Actor Critic version, and a visualizer. Will upgrade the visualizer, and the other methods currently don't really work in terms of obtaining the reference trajectory." />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/ThreeRLPee$train_3lp_ac.coverage" NAME="train_3lp_ac Coverage Results" MODIFIED="1764061027777" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />

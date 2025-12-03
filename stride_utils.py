@@ -162,6 +162,61 @@ def rollout_canonical_policy(
     return RolloutResult(states=world_states, t_ds=env.t_ds, t_ss=env.t_ss, params=env.params)
 
 
+def _collect_canonical_trajectory(
+    policy_fn: Callable[[np.ndarray], np.ndarray],
+    env_kwargs: dict,
+    max_steps: int = 50,
+    seed: Optional[int] = None,
+    log_prefix: str = "viz",
+):
+    try:
+        from env_canonical_stride import ThreeLPCanonicalStrideEnv
+    except Exception as e:
+        print(f"[{log_prefix}] skip native viz: failed to import env ({e})")
+        return None
+    if threelp is None:
+        print(f"[{log_prefix}] skip native viz: threelp not available")
+        return None
+    try:
+        env = ThreeLPCanonicalStrideEnv(**env_kwargs, seed=seed)
+    except Exception as e:
+        print(f"[{log_prefix}] skip native viz: failed to build env ({e})")
+        return None
+    obs, _ = env.reset()
+    try:
+        ref_stride = threelp.build_canonical_stride(env.current.command, env.t_ds, env.t_ss, env.params)
+    except Exception as e:
+        print(f"[{log_prefix}] skip native viz: build_canonical_stride failed ({e})")
+        return None
+
+    states = []
+    actions = []
+    x_abs = env.current.x_ref + env.delta_x
+    states.append(np.asarray(x_abs, dtype=np.float64))
+
+    for _ in range(max_steps):
+        try:
+            action = np.asarray(policy_fn(obs), dtype=np.float64).reshape(-1)
+        except Exception as e:
+            print(f"[{log_prefix}] policy_fn error: {e}")
+            break
+        actions.append(action)
+        obs, _, done, trunc, _ = env.step(action)
+        x_abs = env.current.x_ref + env.delta_x
+        states.append(np.asarray(x_abs, dtype=np.float64))
+        if done or trunc:
+            break
+
+    return {
+        "states": states,
+        "actions": actions,
+        "ref_stride": ref_stride,
+        "params": env.params,
+        "t_ds": env.t_ds,
+        "t_ss": env.t_ss,
+    }
+
+
 def visualize_rollout(
     rollout: RolloutResult,
     loop: bool = False,
@@ -205,16 +260,49 @@ def render_canonical_policy(
     loop: bool = False,
     log_prefix: str = "viz",
     goal: Optional[Sequence[float]] = None,
+    backend: str = "python",
 ) -> None:
-    rollout = rollout_canonical_policy(
-        policy_fn,
-        env_kwargs,
-        max_steps=max_steps,
-        n_substeps=n_substeps,
-        seed=seed,
-        log_prefix=log_prefix,
-    )
-    visualize_rollout(rollout, loop=loop, log_prefix=log_prefix, goal=goal)
+    backend = backend.lower()
+    if backend in ("native", "auto") and threelp is not None and hasattr(threelp, "visualize_canonical_rollout"):
+        traj = _collect_canonical_trajectory(policy_fn, env_kwargs, max_steps=max_steps, seed=seed, log_prefix=log_prefix)
+        if traj is not None and traj["states"]:
+            try:
+                goal_kw = {}
+                if goal is not None:
+                    if len(goal) == 2:
+                        goal_kw["goal"] = (float(goal[0]), float(goal[1]), 0.0)
+                    elif len(goal) >= 3:
+                        goal_kw["goal"] = tuple(float(v) for v in goal[:3])
+                threelp.visualize_canonical_rollout(
+                    states=traj["states"],
+                    actions=traj["actions"],
+                    ref_stride=traj["ref_stride"],
+                    params=traj["params"],
+                    t_ds=traj["t_ds"],
+                    t_ss=traj["t_ss"],
+                    dense_substeps=n_substeps,
+                    show_reference=True,
+                    show_policy=True,
+                    loop=loop,
+                    wait_for_close=loop,
+                    **goal_kw,
+                )
+                return
+            except Exception as e:
+                print(f"[{log_prefix}] native viz error: {e}")
+        if backend == "native":
+            return
+
+    if backend in ("python", "auto"):
+        rollout = rollout_canonical_policy(
+            policy_fn,
+            env_kwargs,
+            max_steps=max_steps,
+            n_substeps=n_substeps,
+            seed=seed,
+            log_prefix=log_prefix,
+        )
+        visualize_rollout(rollout, loop=loop, log_prefix=log_prefix, goal=goal)
 
 
 def make_run_dir(prefix: str = "stride", base: str = "runs") -> Path:

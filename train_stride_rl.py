@@ -76,6 +76,7 @@ def train(args):
         failure_threshold=args.failure_threshold,
         max_steps=args.max_steps,
         debug_log=False,
+        single_command_only=args.single_command_only,
     )
     env = ThreeLPCanonicalStrideEnv(**env_kwargs, seed=args.seed)
 
@@ -208,6 +209,7 @@ def train(args):
                     seed=args.seed,
                     loop=args.viz_loop,
                     log_prefix="viz",
+                    backend=args.viz_backend,
                 )
             except Exception as e:
                 print(f"[viz] render error: {e}")
@@ -233,10 +235,12 @@ if __name__ == "__main__":
     parser.add_argument("--viz-steps", type=int, default=50, help="Number of strides to show when visualizing.")
     parser.add_argument("--viz-substeps", type=int, default=120, help="Dense stride samples for visualization.")
     parser.add_argument("--viz-loop", action="store_true", help="Replay visualization window in a loop.")
+    parser.add_argument("--viz-backend", type=str, choices=["python", "native", "auto"], default="python", help="Visualization backend for canonical strides.")
     parser.add_argument("--log-metrics", action="store_true", help="Write metrics to a JSONL log in the run dir.")
     parser.add_argument("--save-every", type=int, default=0, help="Checkpoint every N episodes (0=off).")
     parser.add_argument("--run-dir", type=str, default=None, help="Optional run directory; defaults to runs/stride_rl_<timestamp>.")
     parser.add_argument("--skip-final-save", action="store_true", help="Skip saving the final checkpoint.")
+    parser.add_argument("--single-command-only", action="store_true", help="Force a single command (no resampling) to test single-speed convergence.")
     args = parser.parse_args()
     
     train(args)
