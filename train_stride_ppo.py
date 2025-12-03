@@ -67,6 +67,8 @@ def train(args):
         q_x_diag=args.q_state,
         r_u_diag=args.r_act,
         reset_noise_std=args.reset_noise,
+        reset_noise_to_state=args.reset_noise_to_state,
+        action_noise_std=args.action_noise_std,
         failure_threshold=args.failure_threshold,
         max_steps=args.max_steps,
         single_command_only=args.single_command_only,
@@ -246,6 +248,8 @@ if __name__ == "__main__":
     parser.add_argument("--r-act", type=float, nargs="+", default=None, help="Length-8 action cost diag")
     parser.add_argument("--u-limit", type=float, default=200.0)
     parser.add_argument("--reset-noise", type=float, default=0.01)
+    parser.add_argument("--reset-noise-to-state", action="store_true", help="Apply reset noise to policy state (delta_x). Off means start exactly at x_ref.")
+    parser.add_argument("--action-noise-std", type=float, default=0.0, help="Add Gaussian exploration noise to actions inside the env.")
     parser.add_argument("--failure-threshold", type=float, default=5.0)
     parser.add_argument("--max-steps", type=int, default=200)
     parser.add_argument("--viz-every", type=int, default=0, help="If >0, render a rollout every N epochs.")
