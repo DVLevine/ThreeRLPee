@@ -34,7 +34,7 @@ class ThreeLPCanonicalStrideEnv(gym.Env):
 
         # Costs (defaults are light so survival bonus stays positive near reference).
         self.q_x = np.array(q_x_diag if q_x_diag is not None else [0.1] * 8, dtype=np.float64)
-        self.r_u = np.array(r_u_diag if r_u_diag is not None else [0.01] * 8, dtype=np.float64)
+        self.r_u = np.array(r_u_diag if r_u_diag is not None else [0.0001] * 8, dtype=np.float64)
         self.q_v = q_v
 
         self.u_limit = u_limit
