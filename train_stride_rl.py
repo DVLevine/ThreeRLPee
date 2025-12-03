@@ -76,6 +76,8 @@ def train(args):
         reset_noise_to_state=args.reset_noise_to_state,
         action_noise_std=args.action_noise_std,
         failure_threshold=args.failure_threshold,
+        fail_penalty=args.fail_penalty,
+        zmp_limit=args.zmp_limit,
         max_steps=args.max_steps,
         debug_log=False,
         single_command_only=args.single_command_only,
@@ -111,6 +113,7 @@ def train(args):
         values = []
         rewards = []
         features_critic = []
+        entropies = []
         
         done = False
         while not done:
@@ -132,6 +135,7 @@ def train(args):
             values.append(critic(z_critic))
             features_critic.append(z_critic) # Store tensor for backward
             rewards.append(reward)
+            entropies.append(dist.entropy().sum())
             
             obs = next_obs
 
@@ -153,11 +157,11 @@ def train(args):
         actor_loss = 0
         critic_loss = 0
         
-        for log_p, v, G, z_c in zip(log_probs, values, returns, features_critic):
+        for log_p, v, G, z_c, ent in zip(log_probs, values, returns, features_critic, entropies):
             advantage = G - v.item() # Detach baseline
             
             # Actor Gradients
-            actor_loss += -log_p * advantage
+            actor_loss += -log_p * advantage - args.ent_coef * ent
             
             # Critic Gradients (MSE)
             # Re-calculate v graph here if needed, or accumulate gradients
@@ -234,6 +238,8 @@ if __name__ == "__main__":
     parser.add_argument("--reset-noise-to-state", action="store_true", help="Apply reset noise to policy state (delta_x). Off means start exactly at x_ref.")
     parser.add_argument("--action-noise-std", type=float, default=0.0, help="Add Gaussian exploration noise to actions inside the env.")
     parser.add_argument("--failure-threshold", type=float, default=5.0)
+    parser.add_argument("--fail-penalty", type=float, default=50.0)
+    parser.add_argument("--zmp-limit", type=float, default=0.25, help="ZMP/COP limit in meters; raise to relax early ZMP terminations.")
     parser.add_argument("--max-steps", type=int, default=200)
     parser.add_argument("--viz-every", type=int, default=0, help="If >0, render a rollout every N episodes.")
     parser.add_argument("--viz-steps", type=int, default=50, help="Number of strides to show when visualizing.")
@@ -245,6 +251,7 @@ if __name__ == "__main__":
     parser.add_argument("--run-dir", type=str, default=None, help="Optional run directory; defaults to runs/stride_rl_<timestamp>.")
     parser.add_argument("--skip-final-save", action="store_true", help="Skip saving the final checkpoint.")
     parser.add_argument("--single-command-only", action="store_true", help="Force a single command (no resampling) to test single-speed convergence.")
+    parser.add_argument("--ent-coef", type=float, default=0.0, help="Entropy bonus coefficient for policy exploration.")
     args = parser.parse_args()
     
     train(args)

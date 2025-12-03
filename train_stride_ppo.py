@@ -70,6 +70,8 @@ def train(args):
         reset_noise_to_state=args.reset_noise_to_state,
         action_noise_std=args.action_noise_std,
         failure_threshold=args.failure_threshold,
+        fail_penalty=args.fail_penalty,
+        zmp_limit=args.zmp_limit,
         max_steps=args.max_steps,
         single_command_only=args.single_command_only,
     )
@@ -175,11 +177,12 @@ def train(args):
             mean, std = actor(b_obs)
             dist = Normal(mean, std)
             new_logp = dist.log_prob(b_act).sum(axis=1)
+            entropy = dist.entropy().sum(axis=1)
             ratio = torch.exp(new_logp - b_logp)
 
             surr1 = ratio * buffer_adv
             surr2 = torch.clamp(ratio, 0.8, 1.2) * buffer_adv
-            loss_pi = -torch.min(surr1, surr2).mean()
+            loss_pi = -(torch.min(surr1, surr2) + args.ent_coef * entropy).mean()
 
             opt_actor.zero_grad()
             loss_pi.backward()
@@ -251,6 +254,8 @@ if __name__ == "__main__":
     parser.add_argument("--reset-noise-to-state", action="store_true", help="Apply reset noise to policy state (delta_x). Off means start exactly at x_ref.")
     parser.add_argument("--action-noise-std", type=float, default=0.0, help="Add Gaussian exploration noise to actions inside the env.")
     parser.add_argument("--failure-threshold", type=float, default=5.0)
+    parser.add_argument("--fail-penalty", type=float, default=50.0)
+    parser.add_argument("--zmp-limit", type=float, default=0.25, help="ZMP/COP limit in meters; raise to relax early ZMP terminations.")
     parser.add_argument("--max-steps", type=int, default=200)
     parser.add_argument("--viz-every", type=int, default=0, help="If >0, render a rollout every N epochs.")
     parser.add_argument("--viz-steps", type=int, default=50, help="Number of strides to show when visualizing.")
@@ -262,6 +267,7 @@ if __name__ == "__main__":
     parser.add_argument("--run-dir", type=str, default=None, help="Optional run directory; defaults to runs/stride_ppo_<timestamp>.")
     parser.add_argument("--skip-final-save", action="store_true", help="Skip saving the final checkpoint.")
     parser.add_argument("--single-command-only", action="store_true", help="Force single command (no resampling) for convergence debugging.")
+    parser.add_argument("--ent-coef", type=float, default=0.0, help="Entropy bonus coefficient for the policy update.")
     args = parser.parse_args()
 
     train(args)
