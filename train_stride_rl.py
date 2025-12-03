@@ -1,170 +1,71 @@
-"""
-Canonical stride-level actor–critic training (Phase A) using torch autograd.
-
-Features:
-- Linear Gaussian actor over φ_a = [δx (8), command (1), bias].
-- Fixed diagonal exploration std.
-- Quadratic-monomial critic updated with semi-gradient TD(0).
-- No observation normalization (physics-scale features are required for linear policies).
-"""
 import argparse
-import math
-from dataclasses import dataclass
-from typing import Tuple
-
+from datetime import datetime
+from pathlib import Path
 import numpy as np
 import torch
-from torch import nn
+import torch.nn as nn
+import torch.nn.functional as F
 from torch.distributions import Normal
-
 from env_canonical_stride import ThreeLPCanonicalStrideEnv
+from stride_utils import JsonlLogger, make_run_dir, render_canonical_policy
 
-
+# --- Feature Builders ---
 def phi_actor(obs: np.ndarray) -> np.ndarray:
-    """Actor features φ_a = [δx, command, 1]."""
-    return np.concatenate([obs.astype(np.float64), np.array([1.0], dtype=np.float64)], axis=0)
-
+    """Actor features: [scaled_obs, 1.0]"""
+    return np.concatenate([obs, [1.0]]).astype(np.float32)
 
 def phi_critic(z: np.ndarray) -> np.ndarray:
-    """All unique quadratic monomials of z (upper triangle)."""
+    """Critic features: Quadratic monomials of z."""
+    # z includes bias, so this naturally covers constant, linear, and quadratic terms
+    n = len(z)
     feats = []
-    d = z.shape[0]
-    for i in range(d):
-        for j in range(i, d):
+    for i in range(n):
+        for j in range(i, n):
             feats.append(z[i] * z[j])
-    return np.asarray(feats, dtype=np.float64)
+    return np.array(feats, dtype=np.float32)
 
-
+# --- Models ---
 class LinearGaussianActor(nn.Module):
-    """
-    Linear Gaussian policy: a ~ N(theta * phi, diag(sigma^2)), fixed sigma.
-    """
-
-    def __init__(self, d_s: int, init_std: float = 0.5):
+    def __init__(self, input_dim, action_dim, init_std=0.5):
         super().__init__()
-        self.theta = nn.Parameter(torch.zeros((8, d_s), dtype=torch.float32))
-        log_std = math.log(init_std)
-        self.register_buffer("log_std", torch.full((8,), float(log_std), dtype=torch.float32))
+        self.theta = nn.Parameter(torch.zeros(action_dim, input_dim))
+        # Learnable log_std, initialized to log(init_std)
+        self.log_std = nn.Parameter(torch.ones(action_dim) * np.log(init_std))
 
-    def forward(self, phi: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        # phi: (..., d_s)
-        mean = torch.matmul(self.theta, phi)
-        return mean, self.log_std
+    def forward(self, x):
+        # x: [input_dim]
+        mean = torch.mv(self.theta, x)
+        std = torch.exp(self.log_std)
+        return mean, std
 
-    def sample(
-        self, phi: torch.Tensor, rng: torch.Generator | None = None
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        mean, log_std = self.forward(phi)
-        std = log_std.exp()
-        noise = torch.randn(mean.shape, device=mean.device, generator=rng) * std
-        action = mean + noise
-        return action, mean, log_std
+class QuadraticCritic(nn.Module):
+    def __init__(self, input_dim):
+        super().__init__()
+        self.w = nn.Parameter(torch.zeros(input_dim))
 
+    def forward(self, x):
+        return torch.dot(self.w, x)
 
-@dataclass
-class QuadraticCritic:
-    w: np.ndarray  # (d_c,)
-
-    @classmethod
-    def zeros(cls, d_c: int):
-        return cls(np.zeros(d_c, dtype=np.float64))
-
-    def value(self, z: np.ndarray) -> float:
-        return float(self.w @ phi_critic(z))
-
-    def update(self, delta: float, z: np.ndarray, alpha_c: float):
-        self.w += alpha_c * delta * phi_critic(z)
+# --- Training ---
+def _save_checkpoint(run_dir: Path, tag: str, actor, critic, env_kwargs: dict, args):
+    run_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "tag": tag,
+        "timestamp": datetime.now().isoformat(),
+        "actor_state": actor.state_dict(),
+        "critic_state": critic.state_dict(),
+        "env_kwargs": env_kwargs,
+        "args": vars(args),
+    }
+    torch.save(payload, run_dir / f"checkpoint_{tag}.pt")
 
 
-def train(
-    episodes: int,
-    gamma: float,
-    alpha_a: float,
-    alpha_c: float,
-    init_std: float,
-    seed: int | None,
-    log_interval: int,
-    env_kwargs: dict,
-    resample_command: bool = False,
-):
-    rng_np = np.random.default_rng(seed)
-    torch_rng = torch.Generator().manual_seed(seed if seed is not None else 0)
+def train(args):
+    # Seeds
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
 
-    env = ThreeLPCanonicalStrideEnv(**env_kwargs, seed=seed)
-    env.resample_command_each_step = bool(resample_command)
-    obs_dim = env.observation_space.shape[0]
-    d_s = obs_dim + 1  # bias
-    d_c = d_s * (d_s + 1) // 2
-
-    actor = LinearGaussianActor(d_s, init_std=init_std)
-    actor_opt = torch.optim.Adam([actor.theta], lr=alpha_a)
-    critic = QuadraticCritic.zeros(d_c)
-
-    returns = []
-    for ep in range(episodes):
-        obs, _ = env.reset()
-        z = phi_actor(obs)
-        done = False
-        trunc = False
-        ep_return = 0.0
-        steps = 0
-
-        while not (done or trunc):
-            # Torch sampling
-            phi_t = torch.tensor(z, dtype=torch.float32)
-            action_t, mean_t, log_std_t = actor.sample(phi_t, rng=torch_rng)
-            action_np = action_t.detach().cpu().numpy()
-
-            next_obs, reward, done, trunc, info = env.step(action_np)
-            z_next = phi_actor(next_obs)
-
-            v = critic.value(z)
-            v_next = 0.0 if done else critic.value(z_next)
-            delta = reward + gamma * v_next - v
-
-            # Critic update (semi-gradient)
-            critic.update(delta, z, alpha_c)
-
-            # Actor update via autograd
-            actor_opt.zero_grad()
-            std_t = log_std_t.exp()
-            dist = Normal(mean_t, std_t)
-            log_prob = dist.log_prob(action_t).sum()
-            loss = -(torch.tensor(delta, dtype=torch.float32) * log_prob)
-            loss.backward()
-            actor_opt.step()
-
-            ep_return += reward
-            steps += 1
-            z = z_next
-
-        returns.append(ep_return)
-        if (ep + 1) % log_interval == 0:
-            avg_ret = np.mean(returns[-log_interval:])
-            print(f"[ep {ep+1}] avg_return({log_interval})={avg_ret:.3f} steps={steps}")
-    return actor, critic, returns
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Train canonical stride-level 3LP actor–critic")
-    parser.add_argument("--episodes", type=int, default=2000)
-    parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--alpha-a", type=float, default=1e-3)
-    parser.add_argument("--alpha-c", type=float, default=5e-3)
-    parser.add_argument("--init-std", type=float, default=0.5, help="Initial exploration std for each action dim")
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--log-interval", type=int, default=50)
-    parser.add_argument("--commands", type=float, nargs="+", default=[1.0], help="Forward speed commands (m/s)")
-    parser.add_argument("--qv", type=float, default=0.0, help="Speed tracking weight")
-    parser.add_argument("--q-state", type=float, nargs="+", default=None, help="Length-8 state cost diag")
-    parser.add_argument("--r-act", type=float, nargs="+", default=None, help="Length-8 action cost diag")
-    parser.add_argument("--u-limit", type=float, default=200.0)
-    parser.add_argument("--reset-noise", type=float, default=0.01)
-    parser.add_argument("--failure-threshold", type=float, default=5.0)
-    parser.add_argument("--max-steps", type=int, default=200)
-    parser.add_argument("--resample-command", action="store_true", help="Resample command each stride to train transitions")
-    args = parser.parse_args()
-
+    # Env
     env_kwargs = dict(
         commands=args.commands,
         q_x_diag=args.q_state,
@@ -176,18 +77,166 @@ def main():
         max_steps=args.max_steps,
         debug_log=False,
     )
-    actor, critic, _ = train(
-        episodes=args.episodes,
-        gamma=args.gamma,
-        alpha_a=args.alpha_a,
-        alpha_c=args.alpha_c,
-        init_std=args.init_std,
-        seed=args.seed,
-        log_interval=args.log_interval,
-        env_kwargs=env_kwargs,
-        resample_command=args.resample_command,
-    )
+    env = ThreeLPCanonicalStrideEnv(**env_kwargs, seed=args.seed)
 
+    # Dims
+    obs_dim = env.observation_space.shape[0]
+    actor_input_dim = obs_dim + 1
+    
+    # Critic dim: size of upper triangle of (actor_input_dim x actor_input_dim)
+    critic_input_dim = actor_input_dim * (actor_input_dim + 1) // 2
+
+    # Networks
+    actor = LinearGaussianActor(actor_input_dim, env.action_space.shape[0], args.init_std)
+    critic = QuadraticCritic(critic_input_dim)
+
+    # Optimizers
+    actor_opt = torch.optim.Adam(actor.parameters(), lr=args.lr_actor)
+    critic_opt = torch.optim.Adam(critic.parameters(), lr=args.lr_critic)
+
+    run_dir = Path(args.run_dir) if args.run_dir else make_run_dir(prefix="stride_rl")
+    print(f"[run] outputs will be written to {run_dir}")
+    log_path = run_dir / "metrics.jsonl"
+    logger = JsonlLogger(log_path) if args.log_metrics else None
+
+    recent_returns = []
+
+    for ep in range(args.episodes):
+        obs, _ = env.reset()
+        
+        log_probs = []
+        values = []
+        rewards = []
+        features_critic = []
+        
+        done = False
+        while not done:
+            # Prepare features
+            z_actor = torch.tensor(phi_actor(obs))
+            z_critic = torch.tensor(phi_critic(z_actor.numpy()))
+            
+            # Actor Step
+            mean, std = actor(z_actor)
+            dist = Normal(mean, std)
+            action = dist.sample()
+            
+            # Env Step
+            next_obs, reward, term, trunc, info = env.step(action.detach().numpy())
+            done = term or trunc
+            
+            # Store
+            log_probs.append(dist.log_prob(action).sum())
+            values.append(critic(z_critic))
+            features_critic.append(z_critic) # Store tensor for backward
+            rewards.append(reward)
+            
+            obs = next_obs
+
+        # --- Update (Episode End) ---
+        
+        # Calculate Returns (Monte Carlo)
+        returns = []
+        G = 0
+        for r in reversed(rewards):
+            G = r + args.gamma * G
+            returns.insert(0, G)
+        returns = torch.tensor(returns, dtype=torch.float32)
+        
+        # Normalize returns? (Often helps stability)
+        if len(returns) > 1:
+            returns = (returns - returns.mean()) / (returns.std() + 1e-8)
+
+        # Compute Losses
+        actor_loss = 0
+        critic_loss = 0
+        
+        for log_p, v, G, z_c in zip(log_probs, values, returns, features_critic):
+            advantage = G - v.item() # Detach baseline
+            
+            # Actor Gradients
+            actor_loss += -log_p * advantage
+            
+            # Critic Gradients (MSE)
+            # Re-calculate v graph here if needed, or accumulate gradients
+            # Simple way: 
+            v_pred = critic(z_c)
+            critic_loss += F.mse_loss(v_pred, torch.tensor(G))
+
+        # Backward Actor
+        actor_opt.zero_grad()
+        actor_loss.backward()
+        torch.nn.utils.clip_grad_norm_(actor.parameters(), 1.0)
+        actor_opt.step()
+
+        # Backward Critic
+        critic_opt.zero_grad()
+        critic_loss.backward()
+        torch.nn.utils.clip_grad_norm_(critic.parameters(), 1.0)
+        critic_opt.step()
+
+        # Logging
+        ep_ret = sum(rewards)
+        recent_returns.append(ep_ret)
+        if logger:
+            logger.log({
+                "episode": ep,
+                "return": float(ep_ret),
+                "length": len(rewards),
+            })
+
+        if (ep+1) % args.log_interval == 0:
+            avg = np.mean(recent_returns[-args.log_interval:])
+            print(f"[Ep {ep+1}] Avg Ret: {avg:.2f} | Last Steps: {len(rewards)} | Sigma: {actor.log_std.exp().mean().item():.3f}")
+
+        if args.save_every > 0 and (ep + 1) % args.save_every == 0:
+            _save_checkpoint(run_dir, f"ep{ep+1:05d}", actor, critic, env_kwargs, args)
+        if ep == args.episodes - 1 and not args.skip_final_save:
+            _save_checkpoint(run_dir, "final", actor, critic, env_kwargs, args)
+
+        if args.viz_every > 0 and (ep + 1) % args.viz_every == 0:
+            def _policy_fn(obs_np: np.ndarray) -> np.ndarray:
+                z_actor = torch.tensor(phi_actor(obs_np))
+                with torch.no_grad():
+                    mean, _ = actor(z_actor)
+                return mean.numpy()
+            try:
+                render_canonical_policy(
+                    _policy_fn,
+                    env_kwargs,
+                    max_steps=args.viz_steps,
+                    n_substeps=args.viz_substeps,
+                    seed=args.seed,
+                    loop=args.viz_loop,
+                    log_prefix="viz",
+                )
+            except Exception as e:
+                print(f"[viz] render error: {e}")
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--episodes", type=int, default=2000)
+    parser.add_argument("--gamma", type=float, default=0.99)
+    parser.add_argument("--lr-actor", type=float, default=1e-4)
+    parser.add_argument("--lr-critic", type=float, default=1e-3)
+    parser.add_argument("--init-std", type=float, default=0.5)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--log-interval", type=int, default=50)
+    parser.add_argument("--commands", type=float, nargs="+", default=[1.0])
+    parser.add_argument("--qv", type=float, default=0.1)
+    parser.add_argument("--q-state", type=float, nargs="+", default=None)
+    parser.add_argument("--r-act", type=float, nargs="+", default=None)
+    parser.add_argument("--u-limit", type=float, default=200.0)
+    parser.add_argument("--reset-noise", type=float, default=0.01)
+    parser.add_argument("--failure-threshold", type=float, default=5.0)
+    parser.add_argument("--max-steps", type=int, default=200)
+    parser.add_argument("--viz-every", type=int, default=0, help="If >0, render a rollout every N episodes.")
+    parser.add_argument("--viz-steps", type=int, default=50, help="Number of strides to show when visualizing.")
+    parser.add_argument("--viz-substeps", type=int, default=120, help="Dense stride samples for visualization.")
+    parser.add_argument("--viz-loop", action="store_true", help="Replay visualization window in a loop.")
+    parser.add_argument("--log-metrics", action="store_true", help="Write metrics to a JSONL log in the run dir.")
+    parser.add_argument("--save-every", type=int, default=0, help="Checkpoint every N episodes (0=off).")
+    parser.add_argument("--run-dir", type=str, default=None, help="Optional run directory; defaults to runs/stride_rl_<timestamp>.")
+    parser.add_argument("--skip-final-save", action="store_true", help="Skip saving the final checkpoint.")
+    args = parser.parse_args()
+    
+    train(args)
