@@ -64,6 +64,11 @@ def train(args):
         commands=args.commands,
         q_v=args.qv,
         u_limit=args.u_limit,
+        q_x_diag=args.q_state,
+        r_u_diag=args.r_act,
+        reset_noise_std=args.reset_noise,
+        failure_threshold=args.failure_threshold,
+        max_steps=args.max_steps,
         single_command_only=args.single_command_only,
     )
     env = ThreeLPCanonicalStrideEnv(**env_kwargs, seed=args.seed)
@@ -235,7 +240,12 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--commands", type=float, nargs="+", default=[1.0])
     parser.add_argument("--qv", type=float, default=0.1)
+    parser.add_argument("--q-state", type=float, nargs="+", default=None, help="Length-8 state cost diag")
+    parser.add_argument("--r-act", type=float, nargs="+", default=None, help="Length-8 action cost diag")
     parser.add_argument("--u-limit", type=float, default=200.0)
+    parser.add_argument("--reset-noise", type=float, default=0.01)
+    parser.add_argument("--failure-threshold", type=float, default=5.0)
+    parser.add_argument("--max-steps", type=int, default=200)
     parser.add_argument("--viz-every", type=int, default=0, help="If >0, render a rollout every N epochs.")
     parser.add_argument("--viz-steps", type=int, default=50, help="Number of strides to show when visualizing.")
     parser.add_argument("--viz-substeps", type=int, default=120, help="Dense stride samples for visualization.")

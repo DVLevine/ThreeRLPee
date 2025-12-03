@@ -24,7 +24,8 @@ class ThreeLPCanonicalStrideEnv(gym.Env):
     def __init__(self, commands=[1.0], t_ds=0.1, t_ss=0.6, params=None,
                  q_x_diag=None, r_u_diag=None, q_v=0.0, u_limit=200.0,
                  reset_noise_std=0.01, failure_threshold=5.0, max_steps=200,
-                 seed=None, debug_log=False, single_command_only=False):
+                 seed=None, debug_log=False, single_command_only=False,
+                 zmp_limit: float = 0.15):
         super().__init__()
         self.params = params or threelp.ThreeLPParams.Adult()
         self.command_grid = np.array(commands, dtype=np.float64).reshape(-1)
@@ -65,15 +66,19 @@ class ThreeLPCanonicalStrideEnv(gym.Env):
         self.delta_x = None
         # If True, always use the first command (no resampling) to diagnose single-speed stability.
         self.single_command_only = bool(single_command_only)
+        self.zmp_limit = zmp_limit
+        self.step_count = 0
 
     def reset(self, seed=None, options=None):
         if seed: self.rng = np.random.default_rng(seed)
         # Single-command mode: force the first command to avoid reference switches.
         self.current = self.maps[0] if self.single_command_only else self.rng.choice(self.maps)
         self.delta_x = self.rng.normal(0, self.reset_noise_std, 8)
+        self.step_count = 0
         return self._get_obs(), {}
 
     def step(self, action):
+        self.step_count += 1
         x_abs = self.current.x_ref + self.delta_x
 
         a = np.clip(action, -self.u_limit, self.u_limit)
@@ -85,8 +90,8 @@ class ThreeLPCanonicalStrideEnv(gym.Env):
         # [Uh_y, Ua_y, Vh_y, Va_y, Uh_x, Ua_x, Vh_x, Va_x]
         mg = (self.params.m1 + 2 * self.params.m2) * self.params.g
         cop_x = u_applied[1] / mg
-        if abs(cop_x) > 0.15:
-            return self._get_obs(), 0.0, True, False, {"fail": "ZMP"}
+        if self.zmp_limit is not None and self.zmp_limit > 0 and abs(cop_x) > self.zmp_limit:
+            return self._get_obs(), 0.0, True, False, {"fail": "ZMP", "cop_x": cop_x}
 
         x_next_abs = self.current.A @ x_abs + self.current.B @ u_applied + self.current.b
         self.delta_x = x_next_abs - self.current.x_ref
@@ -103,8 +108,12 @@ class ThreeLPCanonicalStrideEnv(gym.Env):
 
         # Terminate on Divergence
         fail = np.any(np.abs(self.delta_x) > self.failure_threshold)
+        truncated = self.step_count >= self.max_steps
 
-        return self._get_obs(), reward, fail, False, {}
+        info = {}
+        if fail:
+            info["fail"] = "state_diverged"
+        return self._get_obs(), reward, fail, truncated, info
 
     def _get_obs(self):
         s = np.array([2, 2, 2, 2, 1, 1, 1, 1], dtype=np.float32)
