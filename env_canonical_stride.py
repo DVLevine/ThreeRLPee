@@ -25,16 +25,17 @@ class ThreeLPCanonicalStrideEnv(gym.Env):
                  q_x_diag=None, r_u_diag=None, q_v=0.0, u_limit=200.0,
                  reset_noise_std=0.01, failure_threshold=10.0, max_steps=200,
                  seed=None, debug_log=False, single_command_only=False,
-                 zmp_limit: float = 0.25):
+                 zmp_limit: float = 0.25, enforce_fixed_point: bool = False,
+                 fail_penalty: float = 50.0):
         super().__init__()
         self.params = params or threelp.ThreeLPParams.Adult()
         self.command_grid = np.array(commands, dtype=np.float64).reshape(-1)
         self.t_ds = t_ds
         self.t_ss = t_ss
 
-        # Costs (defaults are light so survival bonus stays positive near reference).
-        self.q_x = np.array(q_x_diag if q_x_diag is not None else [0.1] * 8, dtype=np.float64)
-        self.r_u = np.array(r_u_diag if r_u_diag is not None else [0.0001] * 8, dtype=np.float64)
+        # Costs (defaults light enough that near-ref stays positive).
+        self.q_x = np.array(q_x_diag if q_x_diag is not None else [0.01] * 8, dtype=np.float64)
+        self.r_u = np.array(r_u_diag if r_u_diag is not None else [0.001] * 8, dtype=np.float64)
         self.q_v = q_v
 
         self.u_limit = u_limit
@@ -42,6 +43,7 @@ class ThreeLPCanonicalStrideEnv(gym.Env):
         self.failure_threshold = failure_threshold
         self.max_steps = max_steps
         self.rng = np.random.default_rng(seed)
+        self.enforce_fixed_point = bool(enforce_fixed_point)
 
         self.maps = []
         for cmd in self.command_grid:
@@ -71,6 +73,16 @@ class ThreeLPCanonicalStrideEnv(gym.Env):
                 if debug_log:
                     print(f"[env] skipping command {cmd} due to unsuccessful gait solve")
                 continue
+
+            if self.enforce_fixed_point:
+                # Optional: recompute x_ref to satisfy x_ref = A x_ref + B u_ref + b.
+                I = np.eye(8, dtype=np.float64)
+                rhs = cache.B @ cache.u_ref + cache.b
+                try:
+                    cache.x_ref = np.linalg.solve(I - cache.A, rhs)
+                except np.linalg.LinAlgError:
+                    cache.x_ref = np.linalg.pinv(I - cache.A) @ rhs
+
             self.maps.append(cache)
         if not self.maps:
             raise RuntimeError("No successful canonical stride maps available for the requested commands.")
@@ -83,6 +95,7 @@ class ThreeLPCanonicalStrideEnv(gym.Env):
         self.single_command_only = bool(single_command_only)
         self.zmp_limit = zmp_limit
         self.step_count = 0
+        self.fail_penalty = float(fail_penalty)
 
     def reset(self, seed=None, options=None):
         if seed: self.rng = np.random.default_rng(seed)
@@ -107,7 +120,8 @@ class ThreeLPCanonicalStrideEnv(gym.Env):
         mg = (self.params.m1 + 2 * self.params.m2) * self.params.g
         cop_x = u_applied[1] / mg
         if self.zmp_limit is not None and self.zmp_limit > 0 and abs(cop_x) > self.zmp_limit:
-            return self._get_obs(), 0.0, True, False, {"fail": "ZMP", "cop_x": cop_x}
+            # Heavy terminal penalty so "dying now" is worse than enduring several poor steps.
+            return self._get_obs(), -self.fail_penalty, True, False, {"fail": "ZMP", "cop_x": cop_x}
 
         x_next_abs = self.current.A @ x_abs + self.current.B @ u_applied + self.current.b
         self.delta_x = x_next_abs - self.current.x_ref
@@ -115,9 +129,12 @@ class ThreeLPCanonicalStrideEnv(gym.Env):
         # --- Costs ---
         c_state = np.dot(self.delta_x * self.q_x, self.delta_x)
         c_act = np.dot(a * self.r_u, a)  # penalize residual effort
-        # Pelvis forward velocity (canonical index 2 per spec: [p, p_dot, f, f_dot])
-        v_pelvis_x = x_next_abs[2]
-        c_vel = self.q_v * (v_pelvis_x - self.current.command) ** 2
+        # Optional speed tracking: compare to reference velocity (not command) to avoid bias.
+        c_vel = 0.0
+        if self.q_v != 0.0:
+            v_ref = self.current.x_ref[2]  # pelvis forward velocity at stride start in canonical frame
+            v_pelvis_x = x_next_abs[2]
+            c_vel = self.q_v * (v_pelvis_x - v_ref) ** 2
 
         # --- REWARD SHAPING ---
         # Keep survival bonus dominant near the reference; penalties should be <1 when close to ref.
@@ -130,6 +147,7 @@ class ThreeLPCanonicalStrideEnv(gym.Env):
 
         info = {}
         if fail:
+            reward -= self.fail_penalty
             info["fail"] = "state_diverged"
         return self._get_obs(), reward, fail, truncated, info
 

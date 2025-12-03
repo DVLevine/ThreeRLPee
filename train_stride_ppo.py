@@ -97,6 +97,7 @@ def train(args):
         # --- Collect Batch ---
         buffer_obs, buffer_act, buffer_rew, buffer_val, buffer_logp = [], [], [], [], []
         buffer_feat_c = []
+        buffer_done = []
 
         obs, _ = env.reset()
         ep_rew = 0
@@ -125,6 +126,7 @@ def train(args):
             buffer_val.append(val)
             buffer_logp.append(logp)
             buffer_feat_c.append(feat_c)
+            buffer_done.append(float(term or trunc))
 
             obs = next_obs
             ep_rew += rew
@@ -144,16 +146,16 @@ def train(args):
             last_val = critic(feat_c)
 
         buffer_adv = np.zeros(steps_per_epoch, dtype=np.float32)
-        last_gae = 0
+        last_gae = 0.0
 
         for t in reversed(range(steps_per_epoch)):
             if t == steps_per_epoch - 1:
                 next_val = last_val
             else:
                 next_val = buffer_val[t + 1]
-
-            delta = buffer_rew[t] + args.gamma * next_val - buffer_val[t]
-            last_gae = delta + args.gamma * 0.95 * last_gae  # GAE-Lambda
+            nonterminal = 1.0 - buffer_done[t]
+            delta = buffer_rew[t] + args.gamma * next_val * nonterminal - buffer_val[t]
+            last_gae = delta + args.gamma * 0.95 * nonterminal * last_gae  # GAE-Lambda with done masking
             buffer_adv[t] = last_gae
 
         buffer_ret = torch.tensor(buffer_adv) + torch.stack(buffer_val)
