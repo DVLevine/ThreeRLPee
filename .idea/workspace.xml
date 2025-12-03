@@ -4,8 +4,10 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="1a8e2bf6-3b61-46bf-9584-cf1449945024" name="Changes" comment="Small Update to AGENTS.md">
+    <list default="true" id="1a8e2bf6-3b61-46bf-9584-cf1449945024" name="Changes" comment="Many edits - to the RL program. Mostly correcting visualizer behavior and added saving of actor and critic policies.">
+      <change afterPath="$PROJECT_DIR$/goto_goal_debug.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/env_3lp.py" beforeDir="false" afterPath="$PROJECT_DIR$/env_3lp.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/train_3lp_ac.py" beforeDir="false" afterPath="$PROJECT_DIR$/train_3lp_ac.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -80,7 +82,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1764059985891</updated>
-      <workItem from="1764059986984" duration="48843000" />
+      <workItem from="1764059986984" duration="65977000" />
     </task>
     <task id="LOCAL-00001" summary="Updating the project to have the three_lp dynamics native in python">
       <option name="closed" value="true" />
@@ -202,7 +204,15 @@
       <option name="project" value="LOCAL" />
       <updated>1764550277890</updated>
     </task>
-    <option name="localTasksCounter" value="16" />
+    <task id="LOCAL-00016" summary="Many edits - to the RL program. Mostly correcting visualizer behavior and added saving of actor and critic policies.">
+      <option name="closed" value="true" />
+      <created>1764606159674</created>
+      <option name="number" value="00016" />
+      <option name="presentableId" value="LOCAL-00016" />
+      <option name="project" value="LOCAL" />
+      <updated>1764606159674</updated>
+    </task>
+    <option name="localTasksCounter" value="17" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -235,7 +245,8 @@
     <MESSAGE value="Updated Viz to have repeating loops in playback. Working next to show full trajectory of walk." />
     <MESSAGE value="Small update for pybind compile" />
     <MESSAGE value="Small Update to AGENTS.md" />
-    <option name="LAST_COMMIT_MESSAGE" value="Small Update to AGENTS.md" />
+    <MESSAGE value="Many edits - to the RL program. Mostly correcting visualizer behavior and added saving of actor and critic policies." />
+    <option name="LAST_COMMIT_MESSAGE" value="Many edits - to the RL program. Mostly correcting visualizer behavior and added saving of actor and critic policies." />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/ThreeRLPee$train_3lp_ac.coverage" NAME="train_3lp_ac Coverage Results" MODIFIED="1764061027777" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />

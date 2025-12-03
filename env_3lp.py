@@ -37,14 +37,17 @@ class ThreeLPGotoGoalEnv(gym.Env):
         self,
         dt: float = 0.02,
         step_time: float = 0.4,
-        max_episode_steps: int = 500,
+        max_episode_steps: int = 600,
         goal_radius: float = 0.1,
-        max_action: float = 50.0,  # Nm or normalized units
+        max_action: float = 200.0,  # Nm or normalized units
         seed: int | None = None,
         use_python_sim: bool = True,
         sim_kwargs: dict | None = None,
         fall_vel_threshold: float = 5.0,
         fall_pos_threshold: float = 5.0,
+        success_vel_thresh: float = 0.15,
+        success_hold_steps: int = 3,
+        near_goal_scale: float = 3.0,
         reward_weights: dict | None = None,
         debug_log: bool = False,
     ):
@@ -69,13 +72,24 @@ class ThreeLPGotoGoalEnv(gym.Env):
         self.max_action = max_action
         self.fall_vel_threshold = fall_vel_threshold
         self.fall_pos_threshold = fall_pos_threshold
+        self.success_vel_thresh = success_vel_thresh
+        self.success_hold_steps = success_hold_steps
+        self.near_goal_scale = near_goal_scale
         self.reward_weights = reward_weights or {
-            "progress": 5.0,
+            "progress": 3.0,  # lower a bit
             "alive": 0.5,
             "action": 0.001,
             "smooth": 0.0005,
+            "vel": 1.0,
             "success": 10.0,
-            "fail": -10.0,
+            "fail": -100.0,  # much more negative
+
+        #    "progress": 5.0,
+        #    "alive": 0.5,
+        #    "action": 0.001,
+        #    "smooth": 0.0005,
+        #    "success": 10.0,
+        #    "fail": -10.0,
         }
 
         # --- 3LP state dimensions ---
@@ -119,6 +133,9 @@ class ThreeLPGotoGoalEnv(gym.Env):
         self.prev_action = np.zeros(self.action_dim, dtype=np.float32)
         self.prev_dist = None
         self.debug_log = debug_log
+        self.origin_world = np.zeros(2, dtype=np.float32)  # stance-foot world origin
+        self.support_sign = 1
+        self.goal_hold_counter = 0
 
     # ------------- Utility methods -------------
 
@@ -127,7 +144,8 @@ class ThreeLPGotoGoalEnv(gym.Env):
         Sample a goal in world/ground frame.
         For now: random within a disk of radius R around origin.
         """
-        r = self.np_random.uniform(0.5, 2.0)
+        #r = self.np_random.uniform(0.5, 2.0)
+        r = self.np_random.uniform(0.5, 1.2)
         theta = self.np_random.uniform(-np.pi / 2, np.pi / 2)
         goal = np.array([r * np.cos(theta), r * np.sin(theta)], dtype=np.float32)
         return goal
@@ -145,8 +163,8 @@ class ThreeLPGotoGoalEnv(gym.Env):
         return pelvis_xy
 
     def _compute_observation(self) -> np.ndarray:
-        pelvis_xy = self._get_pelvis_pos(self.state_3lp)
-        goal_rel = self.goal_world - pelvis_xy  # in ground frame; optional: rotate into pelvis frame
+        pelvis_xy = self._get_pelvis_pos(self.state_3lp) + self.origin_world
+        goal_rel = self.goal_world - pelvis_xy  # world/ground frame
 
         # Phase fraction within the current DS/SS segment
         phase_dur = self.sim_info.get("phase_duration", self.step_time) or self.step_time
@@ -162,17 +180,24 @@ class ThreeLPGotoGoalEnv(gym.Env):
 
     def _compute_reward_and_done(self, obs: np.ndarray) -> tuple[float, bool, bool, dict]:
         # Distance to goal
-        pelvis_xy = self._get_pelvis_pos(self.state_3lp)
+        pelvis_xy = self._get_pelvis_pos(self.state_3lp) + self.origin_world
         dist_to_goal = np.linalg.norm(self.goal_world - pelvis_xy)
         progress = self.prev_dist - dist_to_goal if self.prev_dist is not None else 0.0
         self.prev_dist = dist_to_goal
 
         w = self.reward_weights
         action_pen = w["action"] * float(np.dot(self.prev_action, self.prev_action))
-        reward = w["progress"] * progress + w["alive"] - action_pen
+        speed_pelvis = np.linalg.norm(self.state_3lp[8:10])
+        near_goal = dist_to_goal < (self.near_goal_scale * self.goal_radius)
+        vel_pen = w["vel"] * (speed_pelvis ** 2) if near_goal else 0.0
+        reward = w["progress"] * progress + w["alive"] - action_pen - vel_pen
 
         # Termination conditions
-        reached = dist_to_goal < self.goal_radius
+        if dist_to_goal < self.goal_radius and speed_pelvis < self.success_vel_thresh:
+            self.goal_hold_counter += 1
+        else:
+            self.goal_hold_counter = 0
+        reached = self.goal_hold_counter >= self.success_hold_steps
         time_limit = self.step_count >= self.max_episode_steps
 
         # Fall detection: proxy using position/velocity blow-up.
@@ -186,13 +211,26 @@ class ThreeLPGotoGoalEnv(gym.Env):
         terminated = reached or fallen
         truncated = time_limit and not terminated
 
-        if terminated:
-            reward += w["success"] if reached else w["fail"]
+        #if terminated:
+        #    reward += w["success"] if reached else w["fail"]
+
+        if fallen:
+            # Falling is *always* a failure, even if you're close to the goal.
+            reward -= w["progress"] * progress
+            reward += w["fail"]
+        elif reached:
+            # Only add success bonus if you are upright when you reach the goal.
+            reward += w["success"]
+        elif time_limit and not reached:
+            reward += w["fail"] * 0.8  # or something small
 
         info = {
             "dist_to_goal": dist_to_goal,
             "reached_goal": reached,
             "fallen": fallen,
+            "speed_pelvis": speed_pelvis,
+            "near_goal": near_goal,
+            "hold_steps": self.goal_hold_counter,
         }
         if self.debug_log:
             info.update(
@@ -200,11 +238,86 @@ class ThreeLPGotoGoalEnv(gym.Env):
                     "progress": progress,
                     "pos_norm": np.linalg.norm(self.state_3lp[:6]),
                     "vel_norm": np.linalg.norm(self.state_3lp[6:]),
+                    "vel_pen": vel_pen,
                 }
             )
 
         return reward, terminated, truncated, info
 
+    def _compute_reward_and_done_actiontype(self, obs: np.ndarray, action: np.ndarray) -> tuple[float, bool, bool, dict]:
+        # Distance to goal
+        pelvis_xy = self._get_pelvis_pos(self.state_3lp) + self.origin_world
+        dist_to_goal = np.linalg.norm(self.goal_world - pelvis_xy)
+        progress = self.prev_dist - dist_to_goal if self.prev_dist is not None else 0.0
+        self.prev_dist = dist_to_goal
+        speed_pelvis = np.linalg.norm(self.state_3lp[8:10])
+        near_goal = dist_to_goal < (self.near_goal_scale * self.goal_radius)
+
+        w = self.reward_weights
+        # Penalize *current* action magnitude
+        action_mag_pen = w["action"] * float(np.dot(action, action))
+
+        # Penalize changes in action (smoothness)
+        if self.prev_action is not None:
+            diff = action - self.prev_action
+            smooth_pen = w["smooth"] * float(np.dot(diff, diff))
+        else:
+            smooth_pen = 0.0
+
+        vel_pen = w["vel"] * (speed_pelvis ** 2) if near_goal else 0.0
+        reward = w["progress"] * progress + w["alive"] - action_mag_pen - smooth_pen - vel_pen
+
+        # Termination conditions
+        if dist_to_goal < self.goal_radius and speed_pelvis < self.success_vel_thresh:
+            self.goal_hold_counter += 1
+        else:
+            self.goal_hold_counter = 0
+        reached = self.goal_hold_counter >= self.success_hold_steps
+        time_limit = self.step_count >= self.max_episode_steps
+
+        # Fall detection: proxy using position/velocity blow-up.
+        fallen = bool(self.sim_info.get("fallen", False)) if self.sim_info else False
+        if not fallen:
+            pos_norm = np.linalg.norm(self.state_3lp[:6])
+            vel_norm = np.linalg.norm(self.state_3lp[6:])
+            if pos_norm > self.fall_pos_threshold or vel_norm > self.fall_vel_threshold:
+                fallen = True
+
+        terminated = reached or fallen
+        truncated = time_limit and not terminated
+
+        # if terminated:
+        #    reward += w["success"] if reached else w["fail"]
+
+        if fallen:
+            # Falling is *always* a failure, even if you're close to the goal.
+            reward -= w["progress"] * progress
+            reward += w["fail"]
+        elif reached:
+            # Only add success bonus if you are upright when you reach the goal.
+            reward += w["success"]
+        elif time_limit and not reached:
+            reward += w["fail"] * 0.8  # or something small
+
+        info = {
+            "dist_to_goal": dist_to_goal,
+            "reached_goal": reached,
+            "fallen": fallen,
+            "speed_pelvis": speed_pelvis,
+            "near_goal": near_goal,
+            "hold_steps": self.goal_hold_counter,
+        }
+        if self.debug_log:
+            info.update(
+                {
+                    "progress": progress,
+                    "pos_norm": np.linalg.norm(self.state_3lp[:6]),
+                    "vel_norm": np.linalg.norm(self.state_3lp[6:]),
+                    "vel_pen": vel_pen,
+                }
+            )
+
+        return reward, terminated, truncated, info
     # ------------- Gym API -------------
 
     def reset(self, *, seed=None, options=None):
@@ -213,9 +326,11 @@ class ThreeLPGotoGoalEnv(gym.Env):
 
         self.step_count = 0
         self.phase_time = 0.0
+        self.goal_hold_counter = 0
 
         # Sample a new goal
         self.goal_world = self._sample_goal()
+        self.origin_world = np.zeros(2, dtype=np.float32)
 
         if self.sim is not None:
             if ThreeLPSimCpp is not None and isinstance(self.sim, ThreeLPSimCpp):
@@ -237,6 +352,7 @@ class ThreeLPGotoGoalEnv(gym.Env):
                 "fallen": False,
                 "dt": self.dt,
             }
+            self.support_sign = support
         else:
             # Fallback placeholder
             self.state_3lp = np.zeros(self.state_dim_3lp, dtype=np.float32)
@@ -244,7 +360,7 @@ class ThreeLPGotoGoalEnv(gym.Env):
 
         obs = self._compute_observation()
         info = {"goal_world": self.goal_world.copy()}
-        pelvis_xy = self._get_pelvis_pos(self.state_3lp)
+        pelvis_xy = self._get_pelvis_pos(self.state_3lp) + self.origin_world
         self.prev_dist = float(np.linalg.norm(self.goal_world - pelvis_xy))
         self.prev_action = np.zeros(self.action_dim, dtype=np.float32)
         return obs, info
@@ -252,6 +368,8 @@ class ThreeLPGotoGoalEnv(gym.Env):
     def step(self, action: np.ndarray):
         action = np.asarray(action, dtype=np.float32)
         action = np.clip(action, -self.max_action, self.max_action)
+        support_prev = self.support_sign
+        swing_world_prev = self.state_3lp[:2] + self.origin_world  # swing foot world position before step
 
         if self.sim is not None:
             if ThreeLPSimCpp is not None and isinstance(self.sim, ThreeLPSimCpp):
@@ -263,18 +381,25 @@ class ThreeLPGotoGoalEnv(gym.Env):
                     "support_sign": info.get("support_sign", 1.0),
                     "fallen": info.get("fallen", False),
                 }
+                self.support_sign = self.sim_info["support_sign"]
             else:
                 self.state_3lp, self.sim_info = self.sim.step(action)
                 self.phase_time = float(self.sim_info.get("phase_time", self.phase_time + self.dt))
+                self.support_sign = float(self.sim_info.get("support_sign", support_prev))
         else:
             # Placeholder if no simulator is wired
             self.state_3lp = self.state_3lp + 0.0 * action
             self.phase_time = (self.phase_time + self.dt) % self.step_time
+            self.support_sign = support_prev
 
         self.step_count += 1
+        if self.support_sign != support_prev:
+            # New stance foot is previous swing foot; shift origin to keep world frame continuous.
+            self.origin_world = swing_world_prev
 
         obs = self._compute_observation()
-        reward, terminated, truncated, info = self._compute_reward_and_done(obs)
+        #reward, terminated, truncated, info = self._compute_reward_and_done(obs)
+        reward, terminated, truncated, info = self._compute_reward_and_done_actiontype(obs, action) #new
         info.update(self.sim_info)
         self.prev_action = action.copy()
 

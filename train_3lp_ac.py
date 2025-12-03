@@ -181,6 +181,7 @@ def _rollout_states(
     log_prefix="viz",
     override_params=None,
     override_phase_times=None,
+    return_supports=False,
 ):
     try:
         import threelp
@@ -188,9 +189,11 @@ def _rollout_states(
         threelp = None
     sim = env.sim
     states = []
+    supports = []
     obs, _ = env.reset()
     sim = env.sim  # refresh in case reset recreated the sim
     states.append(sim.get_state() if not dense_stride else [float(v) for v in sim.get_state().q])
+    supports.append(sim.support_sign if hasattr(sim, "support_sign") else 1)
     if override_params is not None and hasattr(env, "sim") and env.sim is not None:
         try:
             env.sim.set_params(override_params)
@@ -221,20 +224,61 @@ def _rollout_states(
         use_dense_inputs = have_dense_inputs and action_np.shape[0] == 8
         if use_dense_foot:
             seg = threelp.simulate_stride_with_foot_offset(sim.get_state(), leg, action_np.tolist(), sim.t_ds, sim.t_ss, sim.get_params(), n_substeps)
+            if seg:
+                # old support for all but last, flip on last
+                supports.extend([leg] * (len(seg) - 1))
+                supports.append(-leg)
             for s in seg:
                 states.append(s if not dense_stride else [float(v) for v in s.q])
         elif use_dense_inputs:
             seg = threelp.simulate_stride_with_inputs(sim.get_state(), leg, action_np.tolist(), sim.t_ds, sim.t_ss, sim.get_params(), n_substeps)
+            if seg:
+                supports.extend([leg] * (len(seg) - 1))
+                supports.append(-leg)
             for s in seg:
                 states.append(s if not dense_stride else [float(v) for v in s.q])
         obs, reward, done, trunc, info = env.step(action_np)
-        leg = sim.support_sign if hasattr(sim, "support_sign") else leg
+        leg_new = sim.support_sign if hasattr(sim, "support_sign") else leg
         if not (use_dense_foot or use_dense_inputs):
             states.append(sim.get_state() if not dense_stride else [float(v) for v in sim.get_state().q])
+            supports.append(leg_new)
+        leg = leg_new
         if done or trunc:
             break
         obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+    if return_supports:
+        return states, supports
     return states
+
+
+def _states_to_world(states, supports):
+    """
+    Convert stance-frame states to world-frame by accumulating stance-foot origins.
+    Assumes state layout q=[swing(x,y), pelvis(x,y), stance(x,y), ...].
+    """
+    if len(supports) < len(states) and supports:
+        supports = list(supports) + [supports[-1]] * (len(states) - len(supports))
+    origin = np.zeros(2, dtype=np.float64)
+    world_states = []
+    prev_support = supports[0] if supports else 1
+    for st, sup in zip(states, supports):
+        q = st.q if hasattr(st, "q") else st
+        q = [float(v) for v in q]
+        swing = np.asarray(q[0:2])
+        pelvis = np.asarray(q[2:4])
+        stance = np.asarray(q[4:6])
+        swing_w = swing + origin
+        pelvis_w = pelvis + origin
+        stance_w = stance + origin
+        q_world = q.copy()
+        q_world[0:2] = swing_w
+        q_world[2:4] = pelvis_w
+        q_world[4:6] = stance_w
+        world_states.append(q_world)
+        if sup != prev_support:
+            origin = swing_w
+            prev_support = sup
+    return world_states
 
 
 def maybe_visualize(env, actor, device="cpu", max_steps=200, loop=False, dense_stride=False, n_substeps=120, log_prefix="viz"):
@@ -259,20 +303,36 @@ def maybe_visualize(env, actor, device="cpu", max_steps=200, loop=False, dense_s
         print(f"[{log_prefix}] skip: sim is None")
         return
 
-    states = _rollout_states(env, actor, device=device, max_steps=max_steps, dense_stride=dense_stride, n_substeps=n_substeps, log_prefix=log_prefix)
+    states_raw, supports = _rollout_states(
+        env,
+        actor,
+        device=device,
+        max_steps=max_steps,
+        dense_stride=dense_stride,
+        n_substeps=n_substeps,
+        log_prefix=log_prefix,
+        return_supports=True,
+    )
+    states_world = _states_to_world(states_raw, supports) if supports else states_raw
+    goal_xy = _goal_from_env(env)
     try:
-        if dense_stride:
-            # reconstruct state objs
-            state_objs = []
-            for q in states:
-                s = threelp_mod.ThreeLPState()
-                s.q = q
-                state_objs.append(s)
-            states_use = state_objs
-        else:
-            states_use = states
-        print(f"[{log_prefix}] visualize with {len(states_use)} states, dense={dense_stride}")
-        threelp_mod.visualize_trajectory(states_use, sim.t_ds, sim.t_ss, sim.get_params(), fps=60.0, loop=loop)
+        state_objs = []
+        for q in states_world:
+            s = threelp_mod.ThreeLPState()
+            s.q = q
+            state_objs.append(s)
+        print(f"[{log_prefix}] visualize with {len(state_objs)} states, dense={dense_stride}, world-frame")
+        kwargs = {}
+        if goal_xy is not None and hasattr(threelp_mod, "visualize_trajectory"):
+            # goal_xy may be length 2; expand to 3 with z=0
+            if len(goal_xy) == 2:
+                goal_val = (float(goal_xy[0]), float(goal_xy[1]), 0.0)
+            else:
+                goal_val = tuple(float(v) for v in goal_xy)
+            kwargs["goal"] = goal_val
+        threelp_mod.visualize_trajectory(
+            state_objs, sim.t_ds, sim.t_ss, sim.get_params(), fps=60.0, loop=loop, **kwargs
+        )
     except Exception as e:
         print(f"[{log_prefix}] visualize_trajectory error: {e}")
 
@@ -287,6 +347,12 @@ def _params_to_tuple(params):
         float(params.m2),
         float(params.g),
     )
+
+
+def _goal_from_env(env):
+    if hasattr(env, "goal_world") and env.goal_world is not None:
+        return np.array(env.goal_world, dtype=np.float64)
+    return None
 
 
 def _save_checkpoint(save_dir: Path, actor, critic, cfg, env_type: str, params_tuple, t_ds, t_ss, iteration: int, extra: dict | None = None):
@@ -382,7 +448,7 @@ def _render_job(job):
         return
 
     try:
-        state_lists = _rollout_states(
+        state_lists, supports = _rollout_states(
             env,
             actor,
             device="cpu",
@@ -392,18 +458,27 @@ def _render_job(job):
             log_prefix="viz",
             override_params=_tuple_to_params(params_tuple),
             override_phase_times=(t_ds_val, t_ss_val),
+            return_supports=True,
         )
     except Exception as e:
         print(f"[viz] render rollout error: {e}", flush=True)
         return
 
     try:
+        world_states = _states_to_world(state_lists, supports) if supports else state_lists
         state_objs = []
-        for q in state_lists:
+        for q in world_states:
             s = tlp.ThreeLPState()
             s.q = q if not hasattr(q, "q") else q.q
             state_objs.append(s)
         params_obj = _tuple_to_params(params_tuple)
+        kwargs = {}
+        goal_xy = _goal_from_env(env)
+        if goal_xy is not None:
+            if len(goal_xy) == 2:
+                kwargs["goal"] = (float(goal_xy[0]), float(goal_xy[1]), 0.0)
+            else:
+                kwargs["goal"] = tuple(float(v) for v in goal_xy)
         tlp.visualize_trajectory(
             state_objs,
             t_ds_val,
@@ -412,6 +487,7 @@ def _render_job(job):
             fps=60.0,
             loop=loop_flag,
             wait_for_close=loop_flag,
+            **kwargs,
         )
     except Exception as e:
         print(f"[viz] render visualize error: {e}", flush=True)
@@ -622,16 +698,20 @@ def train(
     if policy_type == "linear":
         actor = LinearBasisActor(cfg).to(device)
         critic = QuadraticCritic(basis_dim=cfg.critic_basis_dim).to(device)
+        # >>> Don't re-normalize obs when using structured basis
+        obs_norm = None
     elif policy_type == "mlp":
         actor = MLPActor(cfg).to(device)
         critic = MLPCritic(cfg).to(device)
+        # >>> MLP can benefit from RunningNorm
+        obs_norm = RunningNorm(shape=(obs_dim,), device=device)
     else:
         raise ValueError(f"Unknown policy_type {policy_type}")
 
     pi_optimizer = optim.Adam(actor.parameters(), lr=3e-4)
     v_optimizer = optim.Adam(critic.parameters(), lr=1e-3)
 
-    obs_norm = RunningNorm(shape=(obs_dim,), device=device)
+    #obs_norm = RunningNorm(shape=(obs_dim,), device=device)
 
     for iteration in range(total_iterations):
         if iteration == 0 and viz_every > 0:
