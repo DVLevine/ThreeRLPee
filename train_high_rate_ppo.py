@@ -102,6 +102,8 @@ def preprocess_obs(env, obs, v_nom):
     sin_phi = np.sin(2 * np.pi * phi)
     cos_phi = np.cos(2 * np.pi * phi)
     z = np.concatenate([5.0 * e, [sin_phi, cos_phi, v_cmd - v_nom]])
+    if not np.all(np.isfinite(z)):
+        z = np.nan_to_num(z, nan=0.0, posinf=0.0, neginf=0.0)
     return z
 
 
