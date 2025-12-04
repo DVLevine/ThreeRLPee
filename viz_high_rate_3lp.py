@@ -55,11 +55,19 @@ def _print_backend(report: Dict[str, object]) -> None:
     print("[backend] compute_uv_torque:", "yes" if report.get("has_uv_torque") else "no")
 
 
+def _infer_hidden_dim(state_dict: dict) -> Optional[int]:
+    """Try to infer hidden width from saved PPO weights."""
+    for key in ("actor.0.weight", "critic.0.weight"):
+        if key in state_dict and hasattr(state_dict[key], "shape"):
+            return int(state_dict[key].shape[0])
+    return None
+
+
 def _make_policy(
     algo: str,
     env: ThreeLPHighRateEnv,
     policy_path: Optional[Path],
-    hidden_dim: int,
+    hidden_dim: Optional[int],
     rng: np.random.Generator,
     eval_noise: float = 0.0,
 ) -> Tuple[Callable[[np.ndarray], np.ndarray], Optional[torch.nn.Module]]:
@@ -67,16 +75,37 @@ def _make_policy(
     v_nom = 0.5 * (env.v_cmd_range[0] + env.v_cmd_range[1])
 
     if algo == "ppo":
-        model = ActorCritic(obs_dim=11, action_dim=env.action_dim, hidden_dim=hidden_dim)
+        state_dict = None
+        inferred_hidden = None
         if policy_path:
             state_dict = torch.load(policy_path, map_location="cpu")
-            model.load_state_dict(state_dict, strict=True)
+            inferred_hidden = _infer_hidden_dim(state_dict)
+        hd = hidden_dim if hidden_dim is not None else (inferred_hidden or 64)
+
+        def _build_model(h: int):
+            return ActorCritic(obs_dim=11, action_dim=env.action_dim, hidden_dim=h)
+
+        model = _build_model(hd)
+        if state_dict is not None:
+            try:
+                model.load_state_dict(state_dict, strict=True)
+            except RuntimeError as exc:
+                # Retry with inferred hidden dim if mismatch.
+                if inferred_hidden is not None and inferred_hidden != hd:
+                    model = _build_model(inferred_hidden)
+                    model.load_state_dict(state_dict, strict=True)
+                else:
+                    raise exc
         model.eval()
 
         def _policy(obs_np: np.ndarray) -> np.ndarray:
-            z = preprocess_obs(env, obs_np, v_nom).to("cpu")
+            z = preprocess_obs(env, obs_np, v_nom)
+            if not isinstance(z, torch.Tensor):
+                z_t = torch.as_tensor(z, dtype=torch.float32, device="cpu")
+            else:
+                z_t = z.to("cpu")
             with torch.no_grad():
-                action, _, _, _ = model.get_action_and_value(z)
+                action, _, _, _ = model.get_action_and_value(z_t)
             if eval_noise > 0.0:
                 noise = torch.randn_like(action) * eval_noise
                 action = action + noise
@@ -315,7 +344,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="High-rate 3LP visualization and sanity-check utility.")
     parser.add_argument("--algo", choices=["ppo", "rl", "zero", "random"], default="ppo", help="Policy type to roll out.")
     parser.add_argument("--policy", type=str, default=None, help="Path to weights (.pt for PPO, .npz for RL).")
-    parser.add_argument("--hidden-dim", type=int, default=64, help="Hidden dim for PPO ActorCritic.")
+    parser.add_argument("--hidden-dim", type=int, default=None, help="Hidden dim for PPO ActorCritic (auto if omitted and .pt provided).")
     parser.add_argument("--steps", type=int, default=400, help="Max steps to roll out.")
     parser.add_argument("--seed", type=int, default=0, help="Reset seed.")
     parser.add_argument("--v-cmd", type=float, default=None, help="Optional fixed command speed for the rollout.")

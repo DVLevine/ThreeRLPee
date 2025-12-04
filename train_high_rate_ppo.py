@@ -13,6 +13,33 @@ from torch.distributions import Normal
 from env_high_rate_3lp import ThreeLPHighRateEnv
 
 
+class RunningMeanStd:
+    def __init__(self, shape, epsilon=1e-4):
+        self.mean = np.zeros(shape, dtype=np.float64)
+        self.var = np.ones(shape, dtype=np.float64)
+        self.count = epsilon
+
+    def update(self, x: np.ndarray):
+        x = np.asarray(x, dtype=np.float64)
+        batch_mean = np.mean(x, axis=0)
+        batch_var = np.var(x, axis=0)
+        batch_count = x.shape[0]
+        self.mean, self.var, self.count = update_mean_var_count_from_moments(
+            self.mean, self.var, self.count, batch_mean, batch_var, batch_count
+        )
+
+
+def update_mean_var_count_from_moments(mean, var, count, batch_mean, batch_var, batch_count):
+    delta = batch_mean - mean
+    tot_count = count + batch_count
+    new_mean = mean + delta * batch_count / tot_count
+    m_a = var * count
+    m_b = batch_var * batch_count
+    M2 = m_a + m_b + np.square(delta) * count * batch_count / tot_count
+    new_var = M2 / tot_count
+    return new_mean, new_var, tot_count
+
+
 # --- Neural Networks ---
 
 def init_layer(layer, std=np.sqrt(2), bias_const=0.0):
@@ -22,7 +49,7 @@ def init_layer(layer, std=np.sqrt(2), bias_const=0.0):
 
 
 class ActorCritic(nn.Module):
-    def __init__(self, obs_dim, action_dim, hidden_dim=64):
+    def __init__(self, obs_dim, action_dim, hidden_dim=256):
         super().__init__()
 
         # Critic: Estimates V(s)
@@ -67,37 +94,22 @@ class ActorCritic(nn.Module):
 # --- Feature Engineering ---
 
 def preprocess_obs(env, obs, v_nom):
-    """
-    Converts raw environment observation into the 'z' feature vector
-    expected by the network.
-
-    Raw Obs (10): [s1... (8), phi, v_cmd]
-    Output z (11): [5.0 * error (8), sin(phi), cos(phi), v_err]
-    """
     x = obs[:8]
     phi = obs[8]
     v_cmd = obs[9]
-
-    if hasattr(env, "reference_state"):
-        x_ref = env.reference_state(phi)
-    else:
-        x_ref = np.zeros_like(x)
-
+    x_ref = env.reference_state(phi) if hasattr(env, "reference_state") else np.zeros_like(x)
     e = x - x_ref
-
     sin_phi = np.sin(2 * np.pi * phi)
     cos_phi = np.cos(2 * np.pi * phi)
-
-    # Moderate scaling on error to help NN conditioning
     z = np.concatenate([5.0 * e, [sin_phi, cos_phi, v_cmd - v_nom]])
-    return torch.FloatTensor(z)
+    return z
 
 
 # --- PPO Trainer ---
 
 def train_ppo(args):
     # Curriculum: fix speed to a single value for initial learning.
-    fixed_speed = 1.2 #0.75
+    fixed_speed = 1.1
     env = ThreeLPHighRateEnv(
         t_ds=args.t_ds,
         t_ss=args.t_ss,
@@ -119,6 +131,7 @@ def train_ppo(args):
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
     agent = ActorCritic(obs_dim, act_dim, hidden_dim=args.hidden_dim).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.lr, eps=1e-5)
+    obs_rms = RunningMeanStd(shape=(obs_dim,))
 
     # Logging
     log_path = Path(args.log_path)
@@ -137,7 +150,10 @@ def train_ppo(args):
     # Tracking
     global_step = 0
     next_obs_np, _ = env.reset(seed=args.seed)
-    next_obs = preprocess_obs(env, next_obs_np, v_nom).to(device)
+    z = preprocess_obs(env, next_obs_np, v_nom)
+    obs_rms.update(z[None, :])
+    z_norm = (z - obs_rms.mean) / np.sqrt(obs_rms.var + 1e-8)
+    next_obs = torch.from_numpy(z_norm).float().to(device)
     next_done = torch.zeros(1).to(device)
 
     ep_ret = 0
@@ -166,10 +182,12 @@ def train_ppo(args):
             action_np = action.cpu().numpy()
             next_obs_np, reward, term, trunc, _ = env.step(action_np)
 
-            # Use raw reward; env now provides positive alive bonus.
             rewards[step] = torch.tensor(reward).to(device)
 
-            next_obs = preprocess_obs(env, next_obs_np, v_nom).to(device)
+            z = preprocess_obs(env, next_obs_np, v_nom)
+            obs_rms.update(z[None, :])
+            z_norm = (z - obs_rms.mean) / np.sqrt(obs_rms.var + 1e-8)
+            next_obs = torch.from_numpy(z_norm).float().to(device)
             done_bool = term or trunc
             next_done = torch.tensor(float(done_bool)).to(device)
 
@@ -182,7 +200,10 @@ def train_ppo(args):
                 ep_len = 0
                 ep_count += 1
                 next_obs_np, _ = env.reset()
-                next_obs = preprocess_obs(env, next_obs_np, v_nom).to(device)
+                z = preprocess_obs(env, next_obs_np, v_nom)
+                obs_rms.update(z[None, :])
+                z_norm = (z - obs_rms.mean) / np.sqrt(obs_rms.var + 1e-8)
+                next_obs = torch.from_numpy(z_norm).float().to(device)
 
         # --- 2. Advantage Estimation (GAE) ---
         with torch.no_grad():
@@ -295,7 +316,7 @@ if __name__ == "__main__":
     parser.add_argument("--max-grad-norm", type=float, default=0.5, help="the maximum norm for the gradient clipping")
 
     # Network
-    parser.add_argument("--hidden-dim", type=int, default=64)
+    parser.add_argument("--hidden-dim", type=int, default=256)
 
     # Logging
     parser.add_argument("--log-path", type=str, default="logs/ppo_log.csv")

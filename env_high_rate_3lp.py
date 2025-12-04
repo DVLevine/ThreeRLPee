@@ -56,6 +56,7 @@ class ThreeLPHighRateEnv(gym.Env):
         reference_cache: Optional[Dict[float, ReferenceStride]] = None,
         reference_builder: Optional[Callable[[float], ReferenceStride]] = None,
         seed: Optional[int] = None,
+        random_phase: bool = True,
     ):
         super().__init__()
         self.t_ds = float(t_ds)
@@ -79,6 +80,7 @@ class ThreeLPHighRateEnv(gym.Env):
         self.reference_cache: Dict[float, ReferenceStride] = reference_cache or {}
         self.reference_builder = reference_builder
         self.rng = np.random.default_rng(seed)
+        self.random_phase = bool(random_phase)
         assert self.t_ds > 1e-6 and self.t_ss > 1e-6, "Phase durations must be positive."
 
         self.stride_time = self.t_ds + self.t_ss
@@ -141,6 +143,25 @@ class ThreeLPHighRateEnv(gym.Env):
         self.reference_cache[v_cmd] = ref
         return ref
 
+    def _interp_ref_values(self, ref: ReferenceStride, phi: float) -> Tuple[np.ndarray, np.ndarray]:
+        """Interpolate reduced and full reference states at phase phi."""
+        phi = float(phi - math.floor(phi))
+        phi_grid = ref.phi
+        if phi_grid.size < 2:
+            return ref.x_ref[0], ref.q_ref[0]
+
+        ph = np.concatenate([phi_grid, [phi_grid[0] + 1.0]])
+        xr = np.vstack([ref.x_ref, ref.x_ref[0]])
+        qr = np.vstack([ref.q_ref, ref.q_ref[0]])
+
+        x_interp = np.empty(8, dtype=np.float64)
+        for i in range(8):
+            x_interp[i] = np.interp(phi, ph, xr[:, i])
+        q_interp = np.empty(12, dtype=np.float64)
+        for i in range(12):
+            q_interp[i] = np.interp(phi, ph, qr[:, i])
+        return x_interp, q_interp
+
     def _interp_ref_state(self, ref: ReferenceStride, phi: float) -> np.ndarray:
         phi = float(phi - math.floor(phi))  # keep in [0,1)
         phi_grid = ref.phi
@@ -157,7 +178,8 @@ class ThreeLPHighRateEnv(gym.Env):
         """Public helper to fetch the reduced reference state at phase φ."""
         if self.current_ref is None:
             return np.zeros(8, dtype=np.float64)
-        return self._interp_ref_state(self.current_ref, phi)
+        x, _ = self._interp_ref_values(self.current_ref, phi)
+        return x
 
     def _torque_correction(self, action: np.ndarray, theta_phase: float) -> np.ndarray:
         a = np.asarray(action, dtype=np.float64).reshape(-1)
@@ -182,18 +204,27 @@ class ThreeLPHighRateEnv(gym.Env):
         self.current_ref = self._get_reference(self.v_cmd)
         self.p_running = self.current_ref.p_ref.copy()
 
-        # Initialize simulator at the reference fixed point.
-        q0 = self.current_ref.q_ref[0] if self.current_ref.q_ref.size > 0 else np.zeros(12, dtype=np.float64)
+        # Randomize phase within the stride to expose stabilizable states.
+        init_phi = float(self.rng.uniform(0.0, 1.0)) if self.random_phase else 0.0
+        self.t_stride = init_phi * self.stride_time
+        if self.t_stride < self.t_ds:
+            self.phase = "ds"
+            self.t_phase = self.t_stride
+        else:
+            self.phase = "ss"
+            self.t_phase = self.t_stride - self.t_ds
+
+        # Interpolate reference at this phase.
+        _, q0 = self._interp_ref_values(self.current_ref, init_phi)
         if self.reset_noise_std > 0.0 or (options and options.get("perturb", False)):
             q0 = q0 + self.rng.normal(0.0, self.reset_noise_std, size=q0.shape)
         st = threelp.ThreeLPState()
         st.q = [float(v) for v in q0]
         self.sim.reset(st, 1)
         self.state_q = np.asarray(self.sim.get_state().q, dtype=np.float64)
-        # Use the actual perturbed state for the reduced observation.
         self.x_can = np.asarray(threelp.canonicalize_reduced_state(self.state_q.tolist(), self.support_sign), dtype=np.float64)
 
-        obs = self._build_obs(self.x_can, 0.0)
+        obs = self._build_obs(self.x_can, init_phi)
         info = {"v_cmd": self.v_cmd}
         return obs.astype(np.float32), info
 
@@ -209,7 +240,7 @@ class ThreeLPHighRateEnv(gym.Env):
         phi = float(self.t_stride / self.stride_time) if self.stride_time > 0 else 0.0
         obs = self._build_obs(self.x_can, phi)
         x = self.x_can
-        x_ref = self._interp_ref_state(self.current_ref, phi) if self.current_ref is not None else np.zeros(8)
+        x_ref, _ = self._interp_ref_values(self.current_ref, phi) if self.current_ref is not None else (np.zeros(8), np.zeros(12))
         e = x - x_ref
         v_forward = x[4]
         e_v = v_forward - self.v_cmd
