@@ -4,9 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="1a8e2bf6-3b61-46bf-9584-cf1449945024" name="Changes" comment="Updated obtaining theta_phase directly.">
+    <list default="true" id="1a8e2bf6-3b61-46bf-9584-cf1449945024" name="Changes" comment="Added some safeties to prevent accidental infinite looping in the C++.">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/env_high_rate_3lp.py" beforeDir="false" afterPath="$PROJECT_DIR$/env_high_rate_3lp.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/train_high_rate_rl.py" beforeDir="false" afterPath="$PROJECT_DIR$/train_high_rate_rl.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -80,7 +80,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1764059985891</updated>
-      <workItem from="1764059986984" duration="99906000" />
+      <workItem from="1764059986984" duration="100667000" />
     </task>
     <task id="LOCAL-00001" summary="Updating the project to have the three_lp dynamics native in python">
       <option name="closed" value="true" />
@@ -330,7 +330,23 @@
       <option name="project" value="LOCAL" />
       <updated>1764824991388</updated>
     </task>
-    <option name="localTasksCounter" value="32" />
+    <task id="LOCAL-00032" summary="Made some robustness edits, though when running we still get NaN after awhile.">
+      <option name="closed" value="true" />
+      <created>1764825451514</created>
+      <option name="number" value="00032" />
+      <option name="presentableId" value="LOCAL-00032" />
+      <option name="project" value="LOCAL" />
+      <updated>1764825451514</updated>
+    </task>
+    <task id="LOCAL-00033" summary="Added some safeties to prevent accidental infinite looping in the C++.">
+      <option name="closed" value="true" />
+      <created>1764825597578</created>
+      <option name="number" value="00033" />
+      <option name="presentableId" value="LOCAL-00033" />
+      <option name="project" value="LOCAL" />
+      <updated>1764825597578</updated>
+    </task>
+    <option name="localTasksCounter" value="34" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -348,8 +364,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="Further dev - preparing new full environment and setup for RL training." />
-    <MESSAGE value="Added CLI commands, and prepared for initial walking test!" />
     <MESSAGE value="Correction to module loading." />
     <MESSAGE value="Added include to visualizer_app.hpp for pybind visual." />
     <MESSAGE value="Fixed dependencies for C++ visualizer, added vel RL scenario. Need to fix camera a bit for demo vis." />
@@ -373,7 +387,9 @@
     <MESSAGE value="Huge update to prepare C++ interface and bindings for dt style RL policy rather than stride style." />
     <MESSAGE value="dt style program is working better - though still doesn't seem to make progress." />
     <MESSAGE value="Updated obtaining theta_phase directly." />
-    <option name="LAST_COMMIT_MESSAGE" value="Updated obtaining theta_phase directly." />
+    <MESSAGE value="Made some robustness edits, though when running we still get NaN after awhile." />
+    <MESSAGE value="Added some safeties to prevent accidental infinite looping in the C++." />
+    <option name="LAST_COMMIT_MESSAGE" value="Added some safeties to prevent accidental infinite looping in the C++." />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/ThreeRLPee$train_3lp_ac.coverage" NAME="train_3lp_ac Coverage Results" MODIFIED="1764061027777" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />

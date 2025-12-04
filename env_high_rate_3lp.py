@@ -184,7 +184,8 @@ class ThreeLPHighRateEnv(gym.Env):
         st.q = [float(v) for v in q0]
         self.sim.reset(st, 1)
         self.state_q = np.asarray(self.sim.get_state().q, dtype=np.float64)
-        self.x_can = np.asarray(self.current_ref.x_ref[0], dtype=np.float64)
+        # Use the actual perturbed state for the reduced observation.
+        self.x_can = np.asarray(threelp.canonicalize_reduced_state(self.state_q.tolist(), self.support_sign), dtype=np.float64)
 
         obs = self._build_obs(self.x_can, 0.0)
         info = {"v_cmd": self.v_cmd}
