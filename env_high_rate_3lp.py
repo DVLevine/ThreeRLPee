@@ -195,20 +195,39 @@ class ThreeLPHighRateEnv(gym.Env):
         if seed is not None:
             self.rng = np.random.default_rng(seed)
         self.step_count = 0
-        self.t_phase = 0.0
-        self.t_stride = 0.0
-        self.phase = "ds"
         self.support_sign = 1
 
-        self.v_cmd = float(options.get("v_cmd")) if options and "v_cmd" in options else float(
-            self.rng.uniform(*self.v_cmd_range)
-        )
+        # 1) Select command speed
+        if options and "v_cmd" in options:
+            self.v_cmd = float(options["v_cmd"])
+        else:
+            self.v_cmd = float(self.rng.uniform(*self.v_cmd_range))
         self.current_ref = self._get_reference(self.v_cmd)
         self.p_running = self.current_ref.p_ref.copy()
 
-        # Randomize phase within the stride to expose stabilizable states.
-        init_phi = float(self.rng.uniform(0.0, 1.0)) if self.random_phase else 0.0
-        self.t_stride = init_phi * self.stride_time
+        # 2) Choose target phase
+        target_phi = float(self.rng.uniform(0.0, 1.0)) if self.random_phase else 0.0
+
+        # 3) Start sim at phi=0 (DS start)
+        _, q_start = self._interp_ref_values(self.current_ref, 0.0)
+        st = threelp.ThreeLPState()
+        st.q = [float(v) for v in q_start]
+        self.sim.reset(st, 1)
+
+        # 4) Warm-start forward to target phase using reference torques
+        target_time = target_phi * self.stride_time
+        t_current = 0.0
+        p_ref_list = self.current_ref.p_ref.tolist()
+        dt_sim = min(0.002, self.dt) if self.dt > 0 else 0.002
+        while t_current + 1e-9 < target_time:
+            dt_step = min(dt_sim, target_time - t_current)
+            self.sim.step_dt(p_ref_list, dt_step)
+            t_current += dt_step
+
+        # 5) Extract state after warm-start
+        sim_state = self.sim.get_state()
+        self.state_q = np.asarray(sim_state.q, dtype=np.float64)
+        self.t_stride = t_current
         if self.t_stride < self.t_ds:
             self.phase = "ds"
             self.t_phase = self.t_stride
@@ -216,19 +235,20 @@ class ThreeLPHighRateEnv(gym.Env):
             self.phase = "ss"
             self.t_phase = self.t_stride - self.t_ds
 
-        # Interpolate reference at this phase.
-        _, q0 = self._interp_ref_values(self.current_ref, init_phi)
-        if self.reset_noise_std > 0.0 or (options and options.get("perturb", False)):
-            q0 = q0 + self.rng.normal(0.0, self.reset_noise_std, size=q0.shape)
-        st = threelp.ThreeLPState()
-        st.q = [float(v) for v in q0]
-        self.sim.reset(st, 1)
-        self.state_q = np.asarray(self.sim.get_state().q, dtype=np.float64)
-        self.x_can = np.asarray(threelp.canonicalize_reduced_state(self.state_q.tolist(), self.support_sign), dtype=np.float64)
+        try:
+            self.support_sign = int(self.sim.leg_flag)
+        except Exception:
+            self.support_sign = 1
 
-        obs = self._build_obs(self.x_can, init_phi)
-        info = {"v_cmd": self.v_cmd}
-        return obs.astype(np.float32), info
+        # Optional small noise after warm-start
+        if self.reset_noise_std > 0.0 or (options and options.get("perturb", False)):
+            self.state_q += self.rng.normal(0.0, self.reset_noise_std, size=self.state_q.shape)
+
+        self.x_can = np.asarray(threelp.canonicalize_reduced_state(self.state_q.tolist(), self.support_sign), dtype=np.float64)
+        phi_actual = self.t_stride / self.stride_time if self.stride_time > 0 else target_phi
+
+        obs = self._build_obs(self.x_can, phi_actual)
+        return obs.astype(np.float32), {"v_cmd": self.v_cmd}
 
     def _build_obs(self, x_can: np.ndarray, phi: float) -> np.ndarray:
         return np.concatenate([x_can, [phi, self.v_cmd]], axis=0)
