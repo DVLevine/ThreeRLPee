@@ -4,9 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="1a8e2bf6-3b61-46bf-9584-cf1449945024" name="Changes" comment="Small updates to reset so that peturbed state is actually set.">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/env_high_rate_3lp.py" beforeDir="false" afterPath="$PROJECT_DIR$/env_high_rate_3lp.py" afterDir="false" />
+    <list default="true" id="1a8e2bf6-3b61-46bf-9584-cf1449945024" name="Changes" comment="fixed NaN from noise buildup, but still learning stall.">
       <change beforePath="$PROJECT_DIR$/train_high_rate_rl.py" beforeDir="false" afterPath="$PROJECT_DIR$/train_high_rate_rl.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -81,7 +79,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1764059985891</updated>
-      <workItem from="1764059986984" duration="101819000" />
+      <workItem from="1764059986984" duration="102480000" />
     </task>
     <task id="LOCAL-00001" summary="Updating the project to have the three_lp dynamics native in python">
       <option name="closed" value="true" />
@@ -355,7 +353,15 @@
       <option name="project" value="LOCAL" />
       <updated>1764826118961</updated>
     </task>
-    <option name="localTasksCounter" value="35" />
+    <task id="LOCAL-00035" summary="fixed NaN from noise buildup, but still learning stall.">
+      <option name="closed" value="true" />
+      <created>1764827300984</created>
+      <option name="number" value="00035" />
+      <option name="presentableId" value="LOCAL-00035" />
+      <option name="project" value="LOCAL" />
+      <updated>1764827300984</updated>
+    </task>
+    <option name="localTasksCounter" value="36" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -373,7 +379,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="Added include to visualizer_app.hpp for pybind visual." />
     <MESSAGE value="Fixed dependencies for C++ visualizer, added vel RL scenario. Need to fix camera a bit for demo vis." />
     <MESSAGE value="Updated scenarios, enabled pybind with visualizer - notably add a constant vel scenario." />
     <MESSAGE value="Updated Viz to have repeating loops in playback. Working next to show full trajectory of walk." />
@@ -398,7 +403,8 @@
     <MESSAGE value="Made some robustness edits, though when running we still get NaN after awhile." />
     <MESSAGE value="Added some safeties to prevent accidental infinite looping in the C++." />
     <MESSAGE value="Small updates to reset so that peturbed state is actually set." />
-    <option name="LAST_COMMIT_MESSAGE" value="Small updates to reset so that peturbed state is actually set." />
+    <MESSAGE value="fixed NaN from noise buildup, but still learning stall." />
+    <option name="LAST_COMMIT_MESSAGE" value="fixed NaN from noise buildup, but still learning stall." />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/ThreeRLPee$train_3lp_ac.coverage" NAME="train_3lp_ac Coverage Results" MODIFIED="1764061027777" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
