@@ -32,14 +32,13 @@ def build_actor_features(env: ThreeLPHighRateEnv, obs: np.ndarray, v_nom: float)
 
 
 def critic_features(z: np.ndarray) -> np.ndarray:
-    """Quadratic monomial critic basis: [1, z, vec_upper(z z^T)]."""
-    feats = [1.0]
-    feats.extend(z.tolist())
-    n = len(z)
-    for i in range(n):
-        for j in range(i, n):
-            feats.append(z[i] * z[j])
-    return np.asarray(feats, dtype=np.float64)
+    """
+    Quadratic monomial critic basis: [1, z, vec_upper(z z^T)].
+    Vectorized for performance.
+    """
+    z = np.asarray(z, dtype=np.float64)
+    quad_terms = np.outer(z, z)[np.triu_indices(len(z))]
+    return np.concatenate([[1.0], z, quad_terms])
 
 
 def train(args):

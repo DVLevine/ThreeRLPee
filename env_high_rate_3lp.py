@@ -43,12 +43,14 @@ class ThreeLPHighRateEnv(gym.Env):
         max_steps: int = 2000,
         action_clip: float = 200.0,
         alpha_p: float = 0.2,
+        p_decay: float = 1.0,
         q_e_diag: Tuple[float, ...] = (20.0, 20.0, 5.0, 5.0, 2.0, 2.0, 1.0, 1.0),
         q_v: float = 5.0,
         r_u: float = 0.01,
         fall_bounds: Tuple[float, float] = (0.6, 0.35),  # |s1x|, |s1y| thresholds
         v_cmd_range: Tuple[float, float] = (0.6, 1.4),
         ref_substeps: int = 120,
+        reset_noise_std: float = 0.0,
         reference_cache: Optional[Dict[float, ReferenceStride]] = None,
         reference_builder: Optional[Callable[[float], ReferenceStride]] = None,
         seed: Optional[int] = None,
@@ -60,15 +62,18 @@ class ThreeLPHighRateEnv(gym.Env):
         self.max_steps = int(max_steps)
         self.action_clip = float(action_clip)
         self.alpha_p = float(alpha_p)
+        self.p_decay = float(p_decay)
         self.q_e = np.diag(np.asarray(q_e_diag, dtype=np.float64))
         self.q_v = float(q_v)
         self.r_u = float(r_u)
         self.fall_bounds = tuple(float(v) for v in fall_bounds)
         self.v_cmd_range = tuple(float(v) for v in v_cmd_range)
         self.ref_substeps = int(ref_substeps)
+        self.reset_noise_std = float(reset_noise_std)
         self.reference_cache: Dict[float, ReferenceStride] = reference_cache or {}
         self.reference_builder = reference_builder
         self.rng = np.random.default_rng(seed)
+        assert self.t_ds > 1e-6 and self.t_ss > 1e-6, "Phase durations must be positive."
 
         self.stride_time = self.t_ds + self.t_ss
         self.obs_dim = 10
@@ -131,7 +136,7 @@ class ThreeLPHighRateEnv(gym.Env):
         return ref
 
     def _interp_ref_state(self, ref: ReferenceStride, phi: float) -> np.ndarray:
-        phi = float(phi % 1.0)
+        phi = float(phi - math.floor(phi))  # keep in [0,1)
         phi_grid = ref.phi
         if phi_grid.size < 2:
             return ref.x_ref[0]
@@ -173,6 +178,8 @@ class ThreeLPHighRateEnv(gym.Env):
 
         # Initialize simulator at the reference fixed point.
         q0 = self.current_ref.q_ref[0] if self.current_ref.q_ref.size > 0 else np.zeros(12, dtype=np.float64)
+        if self.reset_noise_std > 0.0 or (options and options.get("perturb", False)):
+            q0 = q0 + self.rng.normal(0.0, self.reset_noise_std, size=q0.shape)
         st = threelp.ThreeLPState()
         st.q = [float(v) for v in q0]
         self.sim.reset(st, 1)
@@ -204,8 +211,10 @@ class ThreeLPHighRateEnv(gym.Env):
         cost = float(e.T @ self.q_e @ e + self.q_v * (e_v ** 2) + self.r_u * float(np.dot(tau_corr, tau_corr)))
         reward = -self.dt * cost
 
-        # Update torque parameters with smoothing and clip.
-        self.p_running = np.clip(self.p_running + self.alpha_p * act, -self.action_clip, self.action_clip)
+        # Update torque parameters with smoothing and optional leak back to reference.
+        p_target = self.p_running + self.alpha_p * act
+        decay = np.clip(self.p_decay, 0.0, 1.0)
+        self.p_running = np.clip(decay * p_target + (1.0 - decay) * self.current_ref.p_ref, -self.action_clip, self.action_clip)
 
         # Advance simulator by dt.
         state_struct, x_next, info = self.sim.step_dt_augmented(self.p_running.tolist(), float(self.dt))
