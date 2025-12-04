@@ -6,8 +6,6 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 
-from stride_utils import canonical_action_to_stride, lift_canonical_state
-
 try:
     import threelp  # preferred backend (full feature set)
 except Exception:
@@ -22,7 +20,7 @@ class ReferenceStride:
     phi: np.ndarray  # (N,) normalized stride phase in [0,1)
     x_ref: np.ndarray  # (N, 8) reduced canonical state
     q_ref: np.ndarray  # (N, 12) canonical 3LP state
-    p_ref: np.ndarray  # (8,) torque parameters in policy/stride order
+    p_ref: np.ndarray  # (8,) torque parameters in stride order
     stride_time: float
     t_ds: float
     t_ss: float
@@ -91,6 +89,8 @@ class ThreeLPHighRateEnv(gym.Env):
         self.step_count = 0
         self.p_running = np.zeros(self.action_dim, dtype=np.float64)
         self.v_cmd = float(self.v_cmd_range[0])
+        self.state_q = np.zeros(12, dtype=np.float64)
+        self.x_can = np.zeros(8, dtype=np.float64)
 
     # ------------------------------------------------------------------ Backend
     def _build_sim(self):
@@ -102,51 +102,14 @@ class ThreeLPHighRateEnv(gym.Env):
         if threelp is None:
             raise RuntimeError("threelp module is required to build reference gaits automatically.")
         params = threelp.ThreeLPParams.Adult()
-        res = threelp.build_canonical_stride(float(v_cmd), self.t_ds, self.t_ss, params)
-        u_ref_canonical = np.asarray(getattr(res, "u_ref"), dtype=np.float64).reshape(-1)
-        if u_ref_canonical.size != 8:
-            raise RuntimeError("build_canonical_stride returned unexpected u_ref size")
-        p_ref = canonical_action_to_stride(u_ref_canonical)
-        x0 = np.asarray(getattr(res, "x_ref"), dtype=np.float64).reshape(-1)
-        if x0.size != 8:
-            raise RuntimeError("build_canonical_stride returned unexpected x_ref size")
-        q0 = lift_canonical_state(x0)
-
-        # Sample a dense stride using step_dt to get time-aligned reduced reference.
-        sim = threelp.ThreeLPSim(self.t_ds, self.t_ss, params, True)
-        st = threelp.ThreeLPState()
-        st.q = [float(v) for v in q0]
-        sim.reset(st, 1)
-
-        N = max(10, self.ref_substeps)
-        phi_grid = []
-        x_grid = []
-        q_grid = []
-        t_stride = 0.0
-        dt_ref = self.stride_time / float(N)
-        support = 1
-        state_struct = sim.get_state()
-        q_now = np.asarray(state_struct.q, dtype=np.float64)
-        for _ in range(N):
-            phi = (t_stride / self.stride_time) % 1.0
-            q_can = self._canonicalize_state(q_now, support)
-            x = self._project_to_reduced_state(q_can)
-            phi_grid.append(phi)
-            x_grid.append(x)
-            q_grid.append(q_can.copy())
-
-            state_struct, info = sim.step_dt(p_ref.tolist(), float(dt_ref))
-            q_now = np.asarray(state_struct.q, dtype=np.float64)
-            support = int(info.get("support_sign", support))
-            t_stride += dt_ref
-            if t_stride >= self.stride_time:
-                break
-
-        phi_arr = np.asarray(phi_grid, dtype=np.float64)
-        order = np.argsort(phi_arr)
-        phi_arr = phi_arr[order]
-        x_arr = np.asarray(x_grid, dtype=np.float64)[order]
-        q_arr = np.asarray(q_grid, dtype=np.float64)[order]
+        res = threelp.sample_reference_stride(float(v_cmd), self.t_ds, self.t_ss, params, self.ref_substeps)
+        if not res.get("success", False):
+            raise RuntimeError("sample_reference_stride failed for v_cmd={v_cmd}")
+        phi_arr = np.asarray(res["phi"], dtype=np.float64).reshape(-1)
+        x_arr = np.asarray(res["x_can"], dtype=np.float64)
+        q_arr = np.asarray(res["q_can"], dtype=np.float64)
+        p_ref = np.asarray(res["u_ref_stride"], dtype=np.float64).reshape(-1)
+        q0 = np.asarray(res["q_ref0"], dtype=np.float64).reshape(-1)
         return ReferenceStride(
             v_cmd=float(v_cmd),
             phi=phi_arr,
@@ -167,47 +130,11 @@ class ThreeLPHighRateEnv(gym.Env):
         self.reference_cache[v_cmd] = ref
         return ref
 
-    # ---------------------------------------------------------------- Canonicalization / features
-    def _canonicalize_state(self, q: np.ndarray, support_sign: int) -> np.ndarray:
-        """
-        Convert a world-frame 12D state into left-support canonical frame (12D).
-        We avoid the pybind canonicalize_state because it returns the reduced 8D state.
-        """
-        q_can = np.asarray(q, dtype=np.float64).reshape(-1)
-        if q_can.shape[0] != 12:
-            raise ValueError(f"Expected 12D state, got shape {q_can.shape}")
-        if support_sign < 0:
-            # Swap swing/stance blocks (pos and vel)
-            q_can[0:2], q_can[4:6] = q_can[4:6].copy(), q_can[0:2].copy()
-            q_can[6:8], q_can[10:12] = q_can[10:12].copy(), q_can[6:8].copy()
-            # Mirror lateral components (y indices)
-            q_can[[1, 3, 5, 7, 9, 11]] *= -1.0
-        # Recenter to stance foot origin and zero stance velocity drift.
-        stance_xy = q_can[4:6].copy()
-        q_can[0:2] -= stance_xy
-        q_can[2:4] -= stance_xy
-        q_can[4:6] -= stance_xy
-        stance_vel = q_can[10:12].copy()
-        q_can[6:8] -= stance_vel
-        q_can[8:10] -= stance_vel
-        q_can[10:12] -= stance_vel
-        return q_can
-
-    def _project_to_reduced_state(self, q_can: np.ndarray) -> np.ndarray:
-        q = np.asarray(q_can, dtype=np.float64).reshape(-1)
-        s1 = q[2:4] - q[4:6]  # pelvis - stance
-        s2 = q[0:2] - q[2:4]  # swing - pelvis
-        ds1 = q[8:10] - q[10:12]
-        ds2 = q[6:8] - q[8:10]
-        return np.concatenate([s1, s2, ds1, ds2], axis=0)
-
     def _interp_ref_state(self, ref: ReferenceStride, phi: float) -> np.ndarray:
         phi = float(phi % 1.0)
-        # Wrap phi grid for interpolation
         phi_grid = ref.phi
         if phi_grid.size < 2:
             return ref.x_ref[0]
-        # Ensure last point >1 for wrap-around
         ph = np.concatenate([phi_grid, [phi_grid[0] + 1.0]])
         xr = np.vstack([ref.x_ref, ref.x_ref[0]])
         x_interp = np.empty(8, dtype=np.float64)
@@ -245,38 +172,35 @@ class ThreeLPHighRateEnv(gym.Env):
         self.p_running = self.current_ref.p_ref.copy()
 
         # Initialize simulator at the reference fixed point.
-        q0 = self.current_ref.q_ref[0] if self.current_ref.q_ref.size > 0 else lift_canonical_state(np.zeros(8))
+        q0 = self.current_ref.q_ref[0] if self.current_ref.q_ref.size > 0 else np.zeros(12, dtype=np.float64)
         st = threelp.ThreeLPState()
         st.q = [float(v) for v in q0]
         self.sim.reset(st, 1)
         self.state_q = np.asarray(self.sim.get_state().q, dtype=np.float64)
+        self.x_can = np.asarray(self.current_ref.x_ref[0], dtype=np.float64)
 
-        obs = self._build_obs(self.state_q, self.support_sign, self.t_stride)
+        obs = self._build_obs(self.x_can, self.t_stride)
         info = {"v_cmd": self.v_cmd}
         return obs.astype(np.float32), info
 
-    def _build_obs(self, q_world: np.ndarray, support_sign: int, t_stride: float) -> np.ndarray:
-        q_can = self._canonicalize_state(q_world, support_sign)
-        x = self._project_to_reduced_state(q_can)
-        phi = (t_stride % self.stride_time) / self.stride_time
-        return np.concatenate([x, [phi, self.v_cmd]], axis=0)
+    def _build_obs(self, x_can: np.ndarray, phi: float) -> np.ndarray:
+        return np.concatenate([x_can, [phi, self.v_cmd]], axis=0)
 
     def step(self, action: np.ndarray):
         act = np.asarray(action, dtype=np.float64).reshape(-1)
         act = np.clip(act, -self.action_clip, self.action_clip)
 
         # Compute obs/state before stepping for reward.
-        obs = self._build_obs(self.state_q, self.support_sign, self.t_stride)
-        x = obs[:8]
-        phi = float(obs[8])
+        phi = float(self.t_stride / self.stride_time) if self.stride_time > 0 else 0.0
+        obs = self._build_obs(self.x_can, phi)
+        x = self.x_can
         x_ref = self._interp_ref_state(self.current_ref, phi) if self.current_ref is not None else np.zeros(8)
         e = x - x_ref
         v_forward = x[4]
         e_v = v_forward - self.v_cmd
-        theta_phase = (self.t_phase / (self.t_ds if self.phase == "ds" else self.t_ss)) if (
-            self.t_ds > 0 and self.t_ss > 0
-        ) else 0.0
-        tau_corr = self._torque_correction(act, theta_phase)
+        phase_duration = self.t_ds if self.phase == "ds" else self.t_ss
+        theta_phase = (self.t_phase / phase_duration) if phase_duration > 0 else 0.0
+        tau_corr, _ = threelp.compute_uv_torque(act.tolist(), self.phase, float(self.t_phase), self.t_ds, self.t_ss)
         cost = float(e.T @ self.q_e @ e + self.q_v * (e_v ** 2) + self.r_u * float(np.dot(tau_corr, tau_corr)))
         reward = -self.dt * cost
 
@@ -284,23 +208,22 @@ class ThreeLPHighRateEnv(gym.Env):
         self.p_running = np.clip(self.p_running + self.alpha_p * act, -self.action_clip, self.action_clip)
 
         # Advance simulator by dt.
-        state_struct, info = self.sim.step_dt(self.p_running.tolist(), float(self.dt))
+        state_struct, x_next, info = self.sim.step_dt_augmented(self.p_running.tolist(), float(self.dt))
         support_prev = self.support_sign
         self.state_q = np.asarray(state_struct.q, dtype=np.float64)
+        self.x_can = np.asarray(x_next, dtype=np.float64)
         self.support_sign = int(info.get("support_sign", self.support_sign))
-        phase_duration = float(info.get("phase_duration", self.t_ds))
-        self.phase = "ds" if math.isclose(phase_duration, self.t_ds, rel_tol=1e-4, abs_tol=1e-4) else "ss"
+        self.phase = info.get("phase", self.phase)
         self.t_phase = float(info.get("phase_time", self.t_phase + self.dt))
+        phi_stride = float(info.get("phi_stride", (self.t_stride + self.dt) / self.stride_time))
 
         if self.support_sign != support_prev:
             self.t_stride = 0.0
         else:
-            self.t_stride += self.dt
-            if self.t_stride >= self.stride_time:
-                self.t_stride -= self.stride_time
+            self.t_stride = phi_stride * self.stride_time
         self.step_count += 1
 
-        obs_next = self._build_obs(self.state_q, self.support_sign, self.t_stride)
+        obs_next = self._build_obs(self.x_can, self.t_stride / self.stride_time if self.stride_time > 0 else 0.0)
 
         # Termination: pelvis relative displacement exceeds bounds or step limit.
         s1x, s1y = obs_next[0], obs_next[1]
