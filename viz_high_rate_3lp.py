@@ -55,12 +55,28 @@ def _print_backend(report: Dict[str, object]) -> None:
     print("[backend] compute_uv_torque:", "yes" if report.get("has_uv_torque") else "no")
 
 
-def _infer_hidden_dim(state_dict: dict) -> Optional[int]:
-    """Try to infer hidden width from saved PPO weights."""
+def _infer_model_dims(state_dict: dict) -> Tuple[Optional[int], Optional[int]]:
+    """Infer (obs_dim, hidden_dim) from PPO checkpoint if possible."""
+    obs_dim = None
+    hidden_dim = None
     for key in ("actor.0.weight", "critic.0.weight"):
         if key in state_dict and hasattr(state_dict[key], "shape"):
-            return int(state_dict[key].shape[0])
-    return None
+            shape = state_dict[key].shape
+            hidden_dim = int(shape[0])
+            obs_dim = int(shape[1])
+            break
+    return obs_dim, hidden_dim
+
+
+def _prep_obs_for_model(env, obs_np: np.ndarray, v_nom: float, obs_dim_target: int) -> torch.Tensor:
+    """Build z features and pad/trim to match model's expected obs dim."""
+    z = preprocess_obs(env, obs_np, v_nom)
+    z_arr = np.asarray(z, dtype=np.float32).reshape(-1)
+    if z_arr.size < obs_dim_target:
+        z_arr = np.pad(z_arr, (0, obs_dim_target - z_arr.size), mode="constant")
+    elif z_arr.size > obs_dim_target:
+        z_arr = z_arr[:obs_dim_target]
+    return torch.as_tensor(z_arr, dtype=torch.float32, device="cpu")
 
 
 def _make_policy(
@@ -77,33 +93,34 @@ def _make_policy(
     if algo == "ppo":
         state_dict = None
         inferred_hidden = None
+        inferred_obs = None
         if policy_path:
             state_dict = torch.load(policy_path, map_location="cpu")
-            inferred_hidden = _infer_hidden_dim(state_dict)
+            inferred_obs, inferred_hidden = _infer_model_dims(state_dict)
         hd = hidden_dim if hidden_dim is not None else (inferred_hidden or 64)
+        obs_dim = inferred_obs or 11
 
-        def _build_model(h: int):
-            return ActorCritic(obs_dim=11, action_dim=env.action_dim, hidden_dim=h)
+        def _build_model(h: int, odim: int):
+            return ActorCritic(obs_dim=odim, action_dim=env.action_dim, hidden_dim=h)
 
-        model = _build_model(hd)
+        model = _build_model(hd, obs_dim)
         if state_dict is not None:
             try:
                 model.load_state_dict(state_dict, strict=True)
             except RuntimeError as exc:
-                # Retry with inferred hidden dim if mismatch.
-                if inferred_hidden is not None and inferred_hidden != hd:
-                    model = _build_model(inferred_hidden)
+                # Retry with inferred dims if mismatch.
+                if (inferred_hidden is not None and inferred_hidden != hd) or (inferred_obs is not None and inferred_obs != obs_dim):
+                    hd_eff = inferred_hidden or hd
+                    odim_eff = inferred_obs or obs_dim
+                    model = _build_model(hd_eff, odim_eff)
                     model.load_state_dict(state_dict, strict=True)
                 else:
                     raise exc
         model.eval()
+        obs_dim_target = model.actor[0].in_features
 
         def _policy(obs_np: np.ndarray) -> np.ndarray:
-            z = preprocess_obs(env, obs_np, v_nom)
-            if not isinstance(z, torch.Tensor):
-                z_t = torch.as_tensor(z, dtype=torch.float32, device="cpu")
-            else:
-                z_t = z.to("cpu")
+            z_t = _prep_obs_for_model(env, obs_np, v_nom, obs_dim_target)
             with torch.no_grad():
                 action, _, _, _ = model.get_action_and_value(z_t)
             if eval_noise > 0.0:

@@ -97,11 +97,13 @@ def preprocess_obs(env, obs, v_nom):
     x = obs[:8]
     phi = obs[8]
     v_cmd = obs[9]
+    p_err = obs[10:]
     x_ref = env.reference_state(phi) if hasattr(env, "reference_state") else np.zeros_like(x)
     e = x - x_ref
     sin_phi = np.sin(2 * np.pi * phi)
     cos_phi = np.cos(2 * np.pi * phi)
-    z = np.concatenate([5.0 * e, [sin_phi, cos_phi, v_cmd - v_nom]])
+    # Features: error (8), phase sin/cos (2), cmd delta (1), torque error (8) => 19
+    z = np.concatenate([5.0 * e, [sin_phi, cos_phi, v_cmd - v_nom], p_err])
     if not np.all(np.isfinite(z)):
         z = np.nan_to_num(z, nan=0.0, posinf=0.0, neginf=0.0)
     return z
@@ -131,7 +133,7 @@ def train_ppo(args):
     )
     v_nom = fixed_speed
 
-    obs_dim = 11  # Dimension of 'z' vector
+    obs_dim = 19  # Dimension of 'z' vector after adding torque error
     act_dim = env.action_dim
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")

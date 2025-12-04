@@ -87,7 +87,8 @@ class ThreeLPHighRateEnv(gym.Env):
         assert self.t_ds > 1e-6 and self.t_ss > 1e-6, "Phase durations must be positive."
 
         self.stride_time = self.t_ds + self.t_ss
-        self.obs_dim = 10
+        # Obs: 8 x_can + 1 phi + 1 v_cmd + 8 p_error = 18
+        self.obs_dim = 18
         self.action_dim = 8
 
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(self.obs_dim,), dtype=np.float32)
@@ -258,7 +259,11 @@ class ThreeLPHighRateEnv(gym.Env):
         return obs.astype(np.float32), {"v_cmd": self.v_cmd}
 
     def _build_obs(self, x_can: np.ndarray, phi: float) -> np.ndarray:
-        return np.concatenate([x_can, [phi, self.v_cmd]], axis=0)
+        # Include current torque parameters (error to reference) to make the system Markov.
+        p_err = np.zeros(self.action_dim, dtype=np.float64)
+        if self.current_ref is not None:
+            p_err = self.p_running - self.current_ref.p_ref
+        return np.concatenate([x_can, [phi, self.v_cmd], p_err], axis=0)
 
     def step(self, action: np.ndarray):
         act = np.asarray(action, dtype=np.float64).reshape(-1)
