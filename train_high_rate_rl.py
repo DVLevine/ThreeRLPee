@@ -5,6 +5,7 @@ Fixes:
  1) Phase features use sin/cos to respect stride periodicity.
  2) Terminal states do not bootstrap value estimates.
  3) Exploration noise scales with sqrt(dt).
+ 4) Optionally scales state-error features for better conditioning.
 """
 import argparse
 from pathlib import Path
@@ -27,8 +28,10 @@ def build_actor_features(env: ThreeLPHighRateEnv, obs: np.ndarray, v_nom: float)
     e = x - x_ref
     sin_phi = np.sin(2 * np.pi * phi)
     cos_phi = np.cos(2 * np.pi * phi)
+    # Optional scaling: boost error terms so they are comparable to sin/cos magnitude
+    e_scaled = 10.0 * e
     # z dim: 8 (error) + 2 (phase) + 1 (command offset) = 11
-    z = np.concatenate([e, [sin_phi, cos_phi, v_cmd - v_nom]], axis=0)
+    z = np.concatenate([e_scaled, [sin_phi, cos_phi, v_cmd - v_nom]], axis=0)
     return z.astype(np.float64), x_ref
 
 
@@ -48,8 +51,10 @@ def train(args):
         t_ss=args.t_ss,
         dt=args.dt,
         max_steps=args.max_env_steps,
-        alpha_p=0.1,
+        alpha_p=0.05,
         p_decay=0.98,
+        action_clip=10.0,
+        alive_bonus=2.0,
     )
     v_nom = 0.5 * (env.v_cmd_range[0] + env.v_cmd_range[1])
 

@@ -41,9 +41,10 @@ class ThreeLPHighRateEnv(gym.Env):
         t_ss: float = 0.6,
         dt: float = 0.02,
         max_steps: int = 2000,
-        action_clip: float = 50.0,
-        alpha_p: float = 0.1,
+        action_clip: float = 10.0,
+        alpha_p: float = 0.05,
         p_decay: float = 0.98,
+        alive_bonus: float = 2.0,
         q_e_diag: Tuple[float, ...] = (20.0, 20.0, 5.0, 5.0, 2.0, 2.0, 1.0, 1.0),
         q_v: float = 5.0,
         r_u: float = 0.01,
@@ -63,6 +64,7 @@ class ThreeLPHighRateEnv(gym.Env):
         self.action_clip = float(action_clip)
         self.alpha_p = float(alpha_p)
         self.p_decay = float(p_decay)
+        self.alive_bonus = float(alive_bonus)
         self.q_e = np.diag(np.asarray(q_e_diag, dtype=np.float64))
         self.q_v = float(q_v)
         self.r_u = float(r_u)
@@ -210,7 +212,8 @@ class ThreeLPHighRateEnv(gym.Env):
         theta_phase = (self.t_phase / phase_duration) if phase_duration > 0 else 0.0
         tau_corr, _ = threelp.compute_uv_torque(act.tolist(), self.phase, float(self.t_phase), self.t_ds, self.t_ss)
         cost = float(e.T @ self.q_e @ e + self.q_v * (e_v ** 2) + self.r_u * float(np.dot(tau_corr, tau_corr)))
-        reward = -self.dt * cost
+        # Alive bonus keeps per-step reward positive near the reference.
+        reward = self.dt * (self.alive_bonus - cost)
 
         # Update torque parameters with smoothing and optional leak back to reference.
         p_target = self.p_running + self.alpha_p * act
@@ -242,7 +245,7 @@ class ThreeLPHighRateEnv(gym.Env):
         terminated = fallen
         truncated = self.step_count >= self.max_steps
         if fallen:
-            reward -= 200.0
+            reward -= 200.0  # strong terminal penalty
 
         info_out = {
             "support_sign": self.support_sign,
