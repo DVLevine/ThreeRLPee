@@ -255,12 +255,27 @@ class ThreeLPHighRateEnv(gym.Env):
         if fallen:
             reward -= 200.0  # strong terminal penalty
 
+        # Torques based on actual running parameters and reference (for diagnostics/plots).
+        tau_total, _ = threelp.compute_uv_torque(self.p_running.tolist(), self.phase, theta_phase, self.t_ds, self.t_ss)
+        tau_ref = None
+        if self.current_ref is not None:
+            tau_ref, _ = threelp.compute_uv_torque(self.current_ref.p_ref.tolist(), self.phase, theta_phase, self.t_ds, self.t_ss)
+
         info_out = {
             "support_sign": self.support_sign,
             "phase": self.phase,
             "phase_time": self.t_phase,
             "phase_duration": phase_duration,
             "fallen": fallen,
+            "phi_stride": phi_stride,
+            "theta_phase": theta_phase,
+            "p_running": self.p_running.tolist(),
+            "tau_corr": np.asarray(tau_corr, dtype=np.float64).tolist(),
+            "tau_total": np.asarray(tau_total, dtype=np.float64).tolist(),
+            "tau_ref": np.asarray(tau_ref, dtype=np.float64).tolist() if tau_ref is not None else None,
+            "state_world": np.asarray(state_struct.q, dtype=np.float64).tolist(),
+            "x_can": self.x_can.tolist(),
+            "action_applied": act.tolist(),
         }
         return obs_next.astype(np.float32), float(reward), bool(terminated), bool(truncated), info_out
 

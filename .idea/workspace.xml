@@ -4,8 +4,10 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="1a8e2bf6-3b61-46bf-9584-cf1449945024" name="Changes" comment="Scaled weights - no longer NaN but still stalled learning.">
+    <list default="true" id="1a8e2bf6-3b61-46bf-9584-cf1449945024" name="Changes" comment="Added some velocity fall criteria, and increased scaling again - but still stalled learning.">
+      <change afterPath="$PROJECT_DIR$/train_high_rate_ppo.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/env_high_rate_3lp.py" beforeDir="false" afterPath="$PROJECT_DIR$/env_high_rate_3lp.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -79,7 +81,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1764059985891</updated>
-      <workItem from="1764059986984" duration="104519000" />
+      <workItem from="1764059986984" duration="108028000" />
     </task>
     <task id="LOCAL-00001" summary="Updating the project to have the three_lp dynamics native in python">
       <option name="closed" value="true" />
@@ -385,7 +387,15 @@
       <option name="project" value="LOCAL" />
       <updated>1764829370486</updated>
     </task>
-    <option name="localTasksCounter" value="39" />
+    <task id="LOCAL-00039" summary="Added some velocity fall criteria, and increased scaling again - but still stalled learning.">
+      <option name="closed" value="true" />
+      <created>1764830145348</created>
+      <option name="number" value="00039" />
+      <option name="presentableId" value="LOCAL-00039" />
+      <option name="project" value="LOCAL" />
+      <updated>1764830145348</updated>
+    </task>
+    <option name="localTasksCounter" value="40" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -403,7 +413,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="Small update for pybind compile" />
     <MESSAGE value="Small Update to AGENTS.md" />
     <MESSAGE value="Many edits - to the RL program. Mostly correcting visualizer behavior and added saving of actor and critic policies." />
     <MESSAGE value="About to evolve RL to use the new (more carefully designed scenario been working on)" />
@@ -428,7 +437,8 @@
     <MESSAGE value="Implemented changes for cos(phi) sin(phi) to try to learn limit cycle." />
     <MESSAGE value="Added changes to the reward function - still stalled it looks like and then now we get NaN's again." />
     <MESSAGE value="Scaled weights - no longer NaN but still stalled learning." />
-    <option name="LAST_COMMIT_MESSAGE" value="Scaled weights - no longer NaN but still stalled learning." />
+    <MESSAGE value="Added some velocity fall criteria, and increased scaling again - but still stalled learning." />
+    <option name="LAST_COMMIT_MESSAGE" value="Added some velocity fall criteria, and increased scaling again - but still stalled learning." />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/ThreeRLPee$train_3lp_ac.coverage" NAME="train_3lp_ac Coverage Results" MODIFIED="1764061027777" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
