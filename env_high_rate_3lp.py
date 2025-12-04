@@ -49,7 +49,7 @@ class ThreeLPHighRateEnv(gym.Env):
         q_v: float = 5.0,
         r_u: float = 0.01,
         # |s1x|, |s1y| thresholds; extended to include velocity bounds (sag, lat)
-        fall_bounds: Tuple[float, float, float, float] = (5.0, 5.0, 100.0, 100.0),
+        fall_bounds: Tuple[float, float, float, float] = (1.0, 0.5, 10.0, 10.0),
         v_cmd_range: Tuple[float, float] = (0.6, 1.4),
         ref_substeps: int = 120,
         reset_noise_std: float = 0.0,
@@ -277,24 +277,25 @@ class ThreeLPHighRateEnv(gym.Env):
 
         obs_next = self._build_obs(self.x_can, phi_stride if self.stride_time > 0 else 0.0)
 
-        # Termination: check position and velocity bounds to catch blow-ups early,
-        # but do NOT terminate the episode on falls (only truncate on max_steps).
+        # Termination: check position and velocity bounds and terminate on fall.
         s1x, s1y = obs_next[0], obs_next[1]
         ds1x, ds1y = obs_next[4], obs_next[5]
         fallen_pos = abs(s1x) > self.fall_bounds[0] or abs(s1y) > self.fall_bounds[1]
         fallen_vel = abs(ds1x) > self.fall_bounds[2] or abs(ds1y) > self.fall_bounds[3]
         fallen = fallen_pos or fallen_vel
-        terminated = False
+        terminated = fallen
         truncated = self.step_count >= self.max_steps
 
-        # Guard against non-finite or huge observations; end the episode early in that case.
+        # Guard against non-finite or huge observations; treat as fall/explosion.
         if not np.all(np.isfinite(obs_next)) or np.any(np.abs(obs_next) > self.obs_clip):
             obs_next = np.clip(np.nan_to_num(obs_next, nan=0.0, posinf=self.obs_clip, neginf=-self.obs_clip),
                                -self.obs_clip, self.obs_clip)
             truncated = True
+            terminated = True
             fallen = True
-
-        reward = float(np.clip(reward, -10.0, 10.0))
+            reward = -10.0
+        else:
+            reward = float(np.clip(reward, -10.0, 10.0))
 
         # Torques based on actual running parameters and reference (for diagnostics/plots).
         tau_total, _ = threelp.compute_uv_torque(self.p_running.tolist(), self.phase, theta_phase, self.t_ds, self.t_ss)

@@ -122,7 +122,11 @@ def train_ppo(args):
         p_decay=0.98,
         alive_bonus=10.0,
         v_cmd_range=(fixed_speed, fixed_speed),
-        fall_bounds=(5.0, 5.0, 100.0, 100.0),
+        random_phase=True,
+        fall_bounds=(1.0, 0.5, 10.0, 10.0),
+        q_e_diag=(2.0, 2.0, 0.5, 0.5, 0.2, 0.2, 0.1, 0.1),
+        q_v=0.5,
+        r_u=0.001,
         reset_noise_std=0.0,
     )
     v_nom = fixed_speed
