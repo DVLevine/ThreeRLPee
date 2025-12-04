@@ -39,7 +39,7 @@ class ThreeLPHighRateEnv(gym.Env):
         self,
         t_ds: float = 0.1,
         t_ss: float = 0.6,
-        dt: float = 0.02,
+        dt: float = 0.005,
         max_steps: int = 2000,
         action_clip: float = 100.0,
         alpha_p: float = 0.05,
@@ -51,7 +51,7 @@ class ThreeLPHighRateEnv(gym.Env):
         # |s1x|, |s1y| thresholds; extended to include velocity bounds (sag, lat)
         fall_bounds: Tuple[float, float, float, float] = (1.0, 0.5, 10.0, 10.0),
         v_cmd_range: Tuple[float, float] = (0.6, 1.4),
-        ref_substeps: int = 120,
+        ref_substeps: Optional[int] = None,
         reset_noise_std: float = 0.0,
         reference_cache: Optional[Dict[float, ReferenceStride]] = None,
         reference_builder: Optional[Callable[[float], ReferenceStride]] = None,
@@ -76,7 +76,8 @@ class ThreeLPHighRateEnv(gym.Env):
         else:
             self.fall_bounds = tuple(float(v) for v in fall_bounds)
         self.v_cmd_range = tuple(float(v) for v in v_cmd_range)
-        self.ref_substeps = int(ref_substeps)
+        # If ref_substeps is not provided, align reference sampling with the env dt.
+        self.ref_substeps = int(ref_substeps) if ref_substeps is not None and ref_substeps > 0 else None
         self.reset_noise_std = float(reset_noise_std)
         self.reference_cache: Dict[float, ReferenceStride] = reference_cache or {}
         self.reference_builder = reference_builder
@@ -117,14 +118,20 @@ class ThreeLPHighRateEnv(gym.Env):
         if threelp is None:
             raise RuntimeError("threelp module is required to build reference gaits automatically.")
         params = threelp.ThreeLPParams.Adult()
-        res = threelp.sample_reference_stride(float(v_cmd), self.t_ds, self.t_ss, params, self.ref_substeps)
+        # Choose substeps to match env dt unless explicitly overridden.
+        stride_time = self.t_ds + self.t_ss
+        substeps_from_dt = int(math.ceil(stride_time / max(self.dt, 1e-8)))
+        substeps = self.ref_substeps if self.ref_substeps is not None else max(120, max(2, substeps_from_dt))
+
+        res = threelp.sample_reference_stride(float(v_cmd), self.t_ds, self.t_ss, params, substeps)
         if not res.get("success", False):
             raise RuntimeError("sample_reference_stride failed for v_cmd={v_cmd}")
+        # Use the analytic/solver reference directly (fixed target).
         phi_arr = np.asarray(res["phi"], dtype=np.float64).reshape(-1)
         x_arr = np.asarray(res["x_can"], dtype=np.float64)
         q_arr = np.asarray(res["q_can"], dtype=np.float64)
         p_ref = np.asarray(res["u_ref_stride"], dtype=np.float64).reshape(-1)
-        q0 = np.asarray(res["q_ref0"], dtype=np.float64).reshape(-1)
+
         return ReferenceStride(
             v_cmd=float(v_cmd),
             phi=phi_arr,

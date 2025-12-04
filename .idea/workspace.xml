@@ -4,9 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="1a8e2bf6-3b61-46bf-9584-cf1449945024" name="Changes" comment="&quot;fast forward&quot; to correct place on the reference, but still learning is mostly stalled. Interesting that fall backward now">
+    <list default="true" id="1a8e2bf6-3b61-46bf-9584-cf1449945024" name="Changes" comment="Debugged a core issue - the stride built reference gait is broken! it should be the actual canonical stride generator. We found the issue with some new debug scripts. Now time to fix it.">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/train_high_rate_ppo.py" beforeDir="false" afterPath="$PROJECT_DIR$/train_high_rate_ppo.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/env_high_rate_3lp.py" beforeDir="false" afterPath="$PROJECT_DIR$/env_high_rate_3lp.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -80,7 +80,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1764059985891</updated>
-      <workItem from="1764059986984" duration="128209000" />
+      <workItem from="1764059986984" duration="131758000" />
     </task>
     <task id="LOCAL-00001" summary="Updating the project to have the three_lp dynamics native in python">
       <option name="closed" value="true" />
@@ -450,7 +450,15 @@
       <option name="project" value="LOCAL" />
       <updated>1764854259894</updated>
     </task>
-    <option name="localTasksCounter" value="47" />
+    <task id="LOCAL-00047" summary="Debugged a core issue - the stride built reference gait is broken! it should be the actual canonical stride generator. We found the issue with some new debug scripts. Now time to fix it.">
+      <option name="closed" value="true" />
+      <created>1764878643667</created>
+      <option name="number" value="00047" />
+      <option name="presentableId" value="LOCAL-00047" />
+      <option name="project" value="LOCAL" />
+      <updated>1764878643667</updated>
+    </task>
+    <option name="localTasksCounter" value="48" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -468,7 +476,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="Added some command line methods." />
     <MESSAGE value="Made some changes to try to help with weird reward problem." />
     <MESSAGE value="tried to move r a bit - but something else deeper is wrong - we are still terminating every 3 and getting decreased reward for giving up after 2 strides." />
     <MESSAGE value="Tried some modifications to reward function, and fixed a way we handled resetting for the PPO env." />
@@ -493,7 +500,8 @@
     <MESSAGE value="Changes for long sequences - but doesn't seem so." />
     <MESSAGE value="Tightened fail criteria still using random initialization." />
     <MESSAGE value="&quot;fast forward&quot; to correct place on the reference, but still learning is mostly stalled. Interesting that fall backward now" />
-    <option name="LAST_COMMIT_MESSAGE" value="&quot;fast forward&quot; to correct place on the reference, but still learning is mostly stalled. Interesting that fall backward now" />
+    <MESSAGE value="Debugged a core issue - the stride built reference gait is broken! it should be the actual canonical stride generator. We found the issue with some new debug scripts. Now time to fix it." />
+    <option name="LAST_COMMIT_MESSAGE" value="Debugged a core issue - the stride built reference gait is broken! it should be the actual canonical stride generator. We found the issue with some new debug scripts. Now time to fix it." />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/ThreeRLPee$train_3lp_ac.coverage" NAME="train_3lp_ac Coverage Results" MODIFIED="1764061027777" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
