@@ -97,7 +97,7 @@ def preprocess_obs(env, obs, v_nom):
 
 def train_ppo(args):
     # Curriculum: fix speed to a single value for initial learning.
-    fixed_speed = 0.75
+    fixed_speed = 1.2 #0.75
     env = ThreeLPHighRateEnv(
         t_ds=args.t_ds,
         t_ss=args.t_ss,
@@ -108,6 +108,8 @@ def train_ppo(args):
         p_decay=0.98,
         alive_bonus=10.0,
         v_cmd_range=(fixed_speed, fixed_speed),
+        fall_bounds=(5.0, 5.0, 100.0, 100.0),
+        reset_noise_std=0.0,
     )
     v_nom = fixed_speed
 

@@ -49,7 +49,7 @@ class ThreeLPHighRateEnv(gym.Env):
         q_v: float = 5.0,
         r_u: float = 0.01,
         # |s1x|, |s1y| thresholds; extended to include velocity bounds (sag, lat)
-        fall_bounds: Tuple[float, float, float, float] = (0.8, 0.5, 10.0, 10.0),
+        fall_bounds: Tuple[float, float, float, float] = (5.0, 5.0, 100.0, 100.0),
         v_cmd_range: Tuple[float, float] = (0.6, 1.4),
         ref_substeps: int = 120,
         reset_noise_std: float = 0.0,
@@ -70,7 +70,7 @@ class ThreeLPHighRateEnv(gym.Env):
         self.q_v = float(q_v)
         self.r_u = float(r_u)
         if len(fall_bounds) == 2:
-            self.fall_bounds = (float(fall_bounds[0]), float(fall_bounds[1]), 5.0, 5.0)
+            self.fall_bounds = (float(fall_bounds[0]), float(fall_bounds[1]), 100.0, 100.0)
         else:
             self.fall_bounds = tuple(float(v) for v in fall_bounds)
         self.v_cmd_range = tuple(float(v) for v in v_cmd_range)
