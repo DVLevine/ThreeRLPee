@@ -5,7 +5,7 @@ Fixes:
  1) Phase features use sin/cos to respect stride periodicity.
  2) Terminal states do not bootstrap value estimates.
  3) Exploration noise scales with sqrt(dt).
- 4) Optionally scales state-error features for better conditioning.
+ 4) Rewards are scaled to avoid gradient explosions; TD error is clipped.
 """
 import argparse
 from pathlib import Path
@@ -28,10 +28,8 @@ def build_actor_features(env: ThreeLPHighRateEnv, obs: np.ndarray, v_nom: float)
     e = x - x_ref
     sin_phi = np.sin(2 * np.pi * phi)
     cos_phi = np.cos(2 * np.pi * phi)
-    # Optional scaling: boost error terms so they are comparable to sin/cos magnitude
-    e_scaled = 10.0 * e
     # z dim: 8 (error) + 2 (phase) + 1 (command offset) = 11
-    z = np.concatenate([e_scaled, [sin_phi, cos_phi, v_cmd - v_nom]], axis=0)
+    z = np.concatenate([e, [sin_phi, cos_phi, v_cmd - v_nom]], axis=0)
     return z.astype(np.float64), x_ref
 
 
@@ -86,7 +84,9 @@ def train(args):
             noise = rng.normal(scale=scaled_sigma, size=mu.shape)
             action = mu + noise
 
-            obs_next, reward, terminated, truncated, _ = env.step(action.astype(np.float32))
+            obs_next, raw_reward, terminated, truncated, _ = env.step(action.astype(np.float32))
+            # Scale rewards to keep updates small and stable.
+            reward = raw_reward * 0.01
             z_next, _ = build_actor_features(env, obs_next, v_nom)
 
             phi_c = critic_features(z)
@@ -99,6 +99,8 @@ def train(args):
                 v_next = float(theta @ phi_c_next)
 
             delta = reward + args.gamma * v_next - v_curr
+            # Clip TD error to avoid shock updates.
+            delta = np.clip(delta, -1.0, 1.0)
 
             theta += args.alpha_v * delta * phi_c
 
@@ -106,9 +108,13 @@ def train(args):
             grad_logpi = np.outer((action - mu) / effective_var, z)
             W_a += args.alpha_a * delta * grad_logpi
 
+            if np.isnan(v_curr) or np.any(np.isnan(W_a)):
+                print(f"NaN detected at episode {ep}, step {ep_len}")
+                return
+
             obs = obs_next
             z = z_next
-            ep_ret += reward
+            ep_ret += raw_reward  # log unscaled reward for readability
             ep_len += 1
             done = terminated or truncated
 
