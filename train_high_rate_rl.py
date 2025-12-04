@@ -68,7 +68,8 @@ def train(args):
         while not done and ep_len < args.max_steps:
             z, _ = build_actor_features(env, obs, v_nom)
             mu = W_a @ z
-            noise = rng.normal(scale=args.sigma, size=mu.shape)
+            scaled_sigma = args.sigma * np.sqrt(args.dt)
+            noise = rng.normal(scale=scaled_sigma, size=mu.shape)
             action = mu + noise
 
             obs_next, reward, terminated, truncated, _ = env.step(action.astype(np.float32))
@@ -111,7 +112,7 @@ def _parse_args():
     p.add_argument("--dt", type=float, default=0.02, help="Control period Δt.")
     p.add_argument("--t-ds", type=float, default=0.1, help="Double support duration.")
     p.add_argument("--t-ss", type=float, default=0.6, help="Single support duration.")
-    p.add_argument("--sigma", type=float, default=5.0, help="Stddev for Gaussian exploration over torque parameters.")
+    p.add_argument("--sigma", type=float, default=1.0, help="Base stddev for Gaussian exploration; scaled by sqrt(dt).")
     p.add_argument("--alpha-a", type=float, default=1e-4, help="Actor learning rate.")
     p.add_argument("--alpha-v", type=float, default=5e-4, help="Critic learning rate.")
     p.add_argument("--gamma", type=float, default=0.99, help="Discount factor.")
