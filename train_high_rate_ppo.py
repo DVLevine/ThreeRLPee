@@ -96,18 +96,20 @@ def preprocess_obs(env, obs, v_nom):
 # --- PPO Trainer ---
 
 def train_ppo(args):
-    # 1. Environment Setup
+    # Curriculum: fix speed to a single value for initial learning.
+    fixed_speed = 0.75
     env = ThreeLPHighRateEnv(
         t_ds=args.t_ds,
         t_ss=args.t_ss,
         dt=args.dt,
         max_steps=args.max_env_steps,
-        action_clip=100.0,  # Allow full range
-        alpha_p=0.05,  # Smooth updates
+        action_clip=100.0,
+        alpha_p=0.05,
         p_decay=0.98,
-        alive_bonus=2.0  # Critical for survival incentive
+        alive_bonus=10.0,
+        v_cmd_range=(fixed_speed, fixed_speed),
     )
-    v_nom = 0.5 * (env.v_cmd_range[0] + env.v_cmd_range[1])
+    v_nom = fixed_speed
 
     obs_dim = 11  # Dimension of 'z' vector
     act_dim = env.action_dim
@@ -141,7 +143,7 @@ def train_ppo(args):
     ep_count = 0
 
     num_updates = args.total_timesteps // args.num_steps
-    print(f"Starting PPO on {device}: {num_updates} updates, {args.num_steps} steps per update.")
+    print(f"Starting PPO on {device}: {num_updates} updates, {args.num_steps} steps per update, v_cmd={fixed_speed}")
 
     for update in range(1, num_updates + 1):
         # --- 1. Data Collection (Rollout) ---
@@ -162,8 +164,8 @@ def train_ppo(args):
             action_np = action.cpu().numpy()
             next_obs_np, reward, term, trunc, _ = env.step(action_np)
 
-            # Scale reward for PPO stability
-            rewards[step] = torch.tensor(reward * 0.01).to(device)
+            # Use raw reward; env now provides positive alive bonus.
+            rewards[step] = torch.tensor(reward).to(device)
 
             next_obs = preprocess_obs(env, next_obs_np, v_nom).to(device)
             done_bool = term or trunc

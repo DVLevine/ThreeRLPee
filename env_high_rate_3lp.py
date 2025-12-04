@@ -44,12 +44,12 @@ class ThreeLPHighRateEnv(gym.Env):
         action_clip: float = 100.0,
         alpha_p: float = 0.05,
         p_decay: float = 0.98,
-        alive_bonus: float = 2.0,
+        alive_bonus: float = 10.0,
         q_e_diag: Tuple[float, ...] = (20.0, 20.0, 5.0, 5.0, 2.0, 2.0, 1.0, 1.0),
         q_v: float = 5.0,
         r_u: float = 0.01,
         # |s1x|, |s1y| thresholds; extended to include velocity bounds (sag, lat)
-        fall_bounds: Tuple[float, float, float, float] = (0.6, 0.35, 5.0, 5.0),
+        fall_bounds: Tuple[float, float, float, float] = (0.8, 0.5, 10.0, 10.0),
         v_cmd_range: Tuple[float, float] = (0.6, 1.4),
         ref_substeps: int = 120,
         reset_noise_std: float = 0.0,
@@ -252,8 +252,6 @@ class ThreeLPHighRateEnv(gym.Env):
         fallen = fallen_pos or fallen_vel
         terminated = fallen
         truncated = self.step_count >= self.max_steps
-        if fallen:
-            reward -= 200.0  # strong terminal penalty
 
         # Torques based on actual running parameters and reference (for diagnostics/plots).
         tau_total, _ = threelp.compute_uv_torque(self.p_running.tolist(), self.phase, theta_phase, self.t_ds, self.t_ss)
