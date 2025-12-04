@@ -11,6 +11,10 @@ from stride_utils import (
     make_run_dir,
     render_canonical_policy,
 )
+try:
+    import threelp  # type: ignore
+except Exception:
+    threelp = None
 
 
 def phi_actor(obs):
@@ -86,6 +90,30 @@ def train(args):
 
     actor = LinearActor(dim_actor, act_dim, args.init_std)
     critic = QuadraticCritic(dim_critic)
+
+    # Optional warm-start from time-projection / DLQR gain.
+    if args.tp_warm_start:
+        if threelp is None:
+            print("[tp] threelp module not available; skipping TP warm-start")
+        else:
+            cmd = args.tp_command if args.tp_command is not None else float(env.command_grid[0])
+            try:
+                tp = threelp.build_time_projection_controller(cmd, env.t_ds, env.t_ss, env.params, args.tp_use_uv)
+                gain = np.array(tp.dlqr_gain(), dtype=np.float64)
+                if gain.size == 0:
+                    print("[tp] empty gain; skipping warm-start")
+                else:
+                    theta_np = np.zeros((act_dim, dim_actor), dtype=np.float64)
+                    rows = min(act_dim, gain.shape[0])
+                    cols = min(8, gain.shape[1]) if gain.ndim > 1 else 0
+                    if cols > 0:
+                        scale = (env.obs_scale[:cols] * env.u_limit).reshape(1, cols)
+                        theta_np[:rows, :cols] = -gain[:rows, :cols] / scale
+                    actor.theta.data = torch.as_tensor(theta_np, dtype=actor.theta.dtype)
+                    actor.log_std.data[:] = np.log(args.tp_init_std if args.tp_init_std is not None else args.init_std)
+                    print(f"[tp] warm-started actor from TP gain (cmd={cmd}, use_uv={args.tp_use_uv})")
+            except Exception as e:
+                print(f"[tp] warm-start failed: {e}")
 
     opt_actor = torch.optim.Adam(actor.parameters(), lr=args.lr_actor)
     opt_critic = torch.optim.Adam(critic.parameters(), lr=args.lr_critic)
@@ -245,7 +273,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr-critic", type=float, default=1e-3)
     parser.add_argument("--init-std", type=float, default=0.5)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--commands", type=float, nargs="+", default=[1.0])
+    parser.add_argument("--commands", type=float, nargs="+", default=[1.2])
     parser.add_argument("--qv", type=float, default=0.1)
     parser.add_argument("--q-state", type=float, nargs="+", default=None, help="Length-8 state cost diag")
     parser.add_argument("--r-act", type=float, nargs="+", default=None, help="Length-8 action cost diag")
@@ -268,6 +296,13 @@ if __name__ == "__main__":
     parser.add_argument("--skip-final-save", action="store_true", help="Skip saving the final checkpoint.")
     parser.add_argument("--single-command-only", action="store_true", help="Force single command (no resampling) for convergence debugging.")
     parser.add_argument("--ent-coef", type=float, default=0.0, help="Entropy bonus coefficient for the policy update.")
+    parser.add_argument("--tp-warm-start", action="store_true", help="Initialize actor weights from time-projection DLQR gain.")
+    parser.add_argument("--tp-use-uv", action="store_true", default=True, help="Use U+V torques in TP warm-start (default), otherwise U-only.")
+    parser.add_argument("--tp-command", type=float, default=None, help="Command speed to build TP controller; defaults to first env command (TP controller tuned for ~1.2 m/s).")
+    parser.add_argument("--tp-init-std", type=float, default=None, help="Override init std after TP warm-start; defaults to init_std.")
+    parser.add_argument("--tp-fit-actor", action="store_true", help="Fit actor weights to TP projections via least squares on sampled delta_x.")
+    parser.add_argument("--tp-fit-samples", type=int, default=512, help="Number of TP samples for fitting actor.")
+    parser.add_argument("--tp-fit-noise", type=float, default=0.02, help="Std of delta_x sampling for TP fit.")
     args = parser.parse_args()
 
     train(args)
