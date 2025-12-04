@@ -305,7 +305,7 @@ if __name__ == "__main__":
     # Env params
     parser.add_argument("--t-ds", type=float, default=0.1)
     parser.add_argument("--t-ss", type=float, default=0.6)
-    parser.add_argument("--dt", type=float, default=0.02)
+    parser.add_argument("--dt", type=float, default=0.005)
     parser.add_argument("--max-env-steps", type=int, default=2000)
 
     # PPO params
