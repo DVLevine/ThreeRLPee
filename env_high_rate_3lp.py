@@ -179,7 +179,7 @@ class ThreeLPHighRateEnv(gym.Env):
         self.state_q = np.asarray(self.sim.get_state().q, dtype=np.float64)
         self.x_can = np.asarray(self.current_ref.x_ref[0], dtype=np.float64)
 
-        obs = self._build_obs(self.x_can, self.t_stride)
+        obs = self._build_obs(self.x_can, 0.0)
         info = {"v_cmd": self.v_cmd}
         return obs.astype(np.float32), info
 
@@ -216,6 +216,7 @@ class ThreeLPHighRateEnv(gym.Env):
         self.phase = info.get("phase", self.phase)
         self.t_phase = float(info.get("phase_time", self.t_phase + self.dt))
         phi_stride = float(info.get("phi_stride", (self.t_stride + self.dt) / self.stride_time))
+        theta_phase = float(info.get("theta_phase", theta_phase))
 
         if self.support_sign != support_prev:
             self.t_stride = 0.0
@@ -223,7 +224,7 @@ class ThreeLPHighRateEnv(gym.Env):
             self.t_stride = phi_stride * self.stride_time
         self.step_count += 1
 
-        obs_next = self._build_obs(self.x_can, self.t_stride / self.stride_time if self.stride_time > 0 else 0.0)
+        obs_next = self._build_obs(self.x_can, phi_stride if self.stride_time > 0 else 0.0)
 
         # Termination: pelvis relative displacement exceeds bounds or step limit.
         s1x, s1y = obs_next[0], obs_next[1]
