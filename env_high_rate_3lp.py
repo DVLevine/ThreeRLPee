@@ -41,14 +41,15 @@ class ThreeLPHighRateEnv(gym.Env):
         t_ss: float = 0.6,
         dt: float = 0.02,
         max_steps: int = 2000,
-        action_clip: float = 10.0,
+        action_clip: float = 100.0,
         alpha_p: float = 0.05,
         p_decay: float = 0.98,
         alive_bonus: float = 2.0,
         q_e_diag: Tuple[float, ...] = (20.0, 20.0, 5.0, 5.0, 2.0, 2.0, 1.0, 1.0),
         q_v: float = 5.0,
         r_u: float = 0.01,
-        fall_bounds: Tuple[float, float] = (0.6, 0.35),  # |s1x|, |s1y| thresholds
+        # |s1x|, |s1y| thresholds; extended to include velocity bounds (sag, lat)
+        fall_bounds: Tuple[float, float, float, float] = (0.6, 0.35, 5.0, 5.0),
         v_cmd_range: Tuple[float, float] = (0.6, 1.4),
         ref_substeps: int = 120,
         reset_noise_std: float = 0.0,
@@ -68,7 +69,10 @@ class ThreeLPHighRateEnv(gym.Env):
         self.q_e = np.diag(np.asarray(q_e_diag, dtype=np.float64))
         self.q_v = float(q_v)
         self.r_u = float(r_u)
-        self.fall_bounds = tuple(float(v) for v in fall_bounds)
+        if len(fall_bounds) == 2:
+            self.fall_bounds = (float(fall_bounds[0]), float(fall_bounds[1]), 5.0, 5.0)
+        else:
+            self.fall_bounds = tuple(float(v) for v in fall_bounds)
         self.v_cmd_range = tuple(float(v) for v in v_cmd_range)
         self.ref_substeps = int(ref_substeps)
         self.reset_noise_std = float(reset_noise_std)
@@ -198,7 +202,8 @@ class ThreeLPHighRateEnv(gym.Env):
 
     def step(self, action: np.ndarray):
         act = np.asarray(action, dtype=np.float64).reshape(-1)
-        act = np.clip(act, -self.action_clip, self.action_clip)
+        # Clip per-step delta tightly; accumulated params are clipped separately.
+        act = np.clip(act, -10.0, 10.0)
 
         # Compute obs/state before stepping for reward.
         phi = float(self.t_stride / self.stride_time) if self.stride_time > 0 else 0.0
@@ -239,9 +244,12 @@ class ThreeLPHighRateEnv(gym.Env):
 
         obs_next = self._build_obs(self.x_can, phi_stride if self.stride_time > 0 else 0.0)
 
-        # Termination: pelvis relative displacement exceeds bounds or step limit.
+        # Termination: check position and velocity bounds to catch blow-ups early.
         s1x, s1y = obs_next[0], obs_next[1]
-        fallen = abs(s1x) > self.fall_bounds[0] or abs(s1y) > self.fall_bounds[1]
+        ds1x, ds1y = obs_next[4], obs_next[5]
+        fallen_pos = abs(s1x) > self.fall_bounds[0] or abs(s1y) > self.fall_bounds[1]
+        fallen_vel = abs(ds1x) > self.fall_bounds[2] or abs(ds1y) > self.fall_bounds[3]
+        fallen = fallen_pos or fallen_vel
         terminated = fallen
         truncated = self.step_count >= self.max_steps
         if fallen:

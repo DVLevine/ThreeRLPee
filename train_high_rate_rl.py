@@ -28,8 +28,8 @@ def build_actor_features(env: ThreeLPHighRateEnv, obs: np.ndarray, v_nom: float)
     e = x - x_ref
     sin_phi = np.sin(2 * np.pi * phi)
     cos_phi = np.cos(2 * np.pi * phi)
-    # z dim: 8 (error) + 2 (phase) + 1 (command offset) = 11
-    z = np.concatenate([e, [sin_phi, cos_phi, v_cmd - v_nom]], axis=0)
+    # Moderate scaling on error terms to aid conditioning.
+    z = np.concatenate([5.0 * e, [sin_phi, cos_phi, v_cmd - v_nom]], axis=0)
     return z.astype(np.float64), x_ref
 
 
@@ -51,7 +51,7 @@ def train(args):
         max_steps=args.max_env_steps,
         alpha_p=0.05,
         p_decay=0.98,
-        action_clip=10.0,
+        action_clip=100.0,
         alive_bonus=2.0,
     )
     v_nom = 0.5 * (env.v_cmd_range[0] + env.v_cmd_range[1])
