@@ -120,8 +120,9 @@ def train_ppo(args):
         dt=args.dt,
         max_steps=args.max_env_steps,
         action_clip=100.0,
-        alpha_p=0.05,
-        p_decay=0.98,
+        # Increase control authority and reduce leak-back to reference.
+        alpha_p=0.2,
+        p_decay=0.995,
         alive_bonus=10.0,
         v_cmd_range=(fixed_speed, fixed_speed),
         random_phase=True,
@@ -129,7 +130,7 @@ def train_ppo(args):
         q_e_diag=(2.0, 2.0, 0.5, 0.5, 0.2, 0.2, 0.1, 0.1),
         q_v=0.5,
         r_u=0.001,
-        reset_noise_std=0.0,
+        reset_noise_std=0.1, #0.0,
     )
     v_nom = fixed_speed
 
@@ -315,7 +316,7 @@ if __name__ == "__main__":
                         help="the number of steps to run in each environment per policy rollout")
     parser.add_argument("--minibatch-size", type=int, default=64, help="the number of mini-batches")
     parser.add_argument("--update-epochs", type=int, default=10, help="the K epochs to update the policy")
-    parser.add_argument("--gamma", type=float, default=0.99, help="the discount factor gamma")
+    parser.add_argument("--gamma", type=float, default=0.9975, help="the discount factor gamma") #expanded for two cycles out
     parser.add_argument("--gae-lambda", type=float, default=0.95,
                         help="the lambda for the general advantage estimation")
     parser.add_argument("--clip-coef", type=float, default=0.2, help="the surrogate clipping coefficient")
