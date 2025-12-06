@@ -38,6 +38,26 @@ class ReferenceStride:
 
 
 # ---------------------------------------------------------------------------
+#  Action ordering
+# ---------------------------------------------------------------------------
+
+# Canonical -> stride-map order. Canonical uses
+# [Uh_y, Ua_y, Vh_y, Va_y, Uh_x, Ua_x, Vh_x, Va_x]
+# while stride-map (used by C++ sim) expects
+# [Uh_y, Uh_x, Ua_y, Ua_x, Vh_y, Vh_x, Va_y, Va_x].
+_CANONICAL_TO_STRIDE = (0, 2, 4, 6, 1, 3, 5, 7)
+
+
+def _canonical_action_to_stride(action: np.ndarray) -> np.ndarray:
+    out = np.zeros(8, dtype=np.float64)
+    a = np.asarray(action, dtype=np.float64).reshape(-1)
+    for i, col in enumerate(_CANONICAL_TO_STRIDE):
+        if i < a.size and col < out.size:
+            out[col] = a[i]
+    return out
+
+
+# ---------------------------------------------------------------------------
 #  Stride-level RL environment around the 3LP gait manifold
 # ---------------------------------------------------------------------------
 
@@ -102,6 +122,7 @@ class ThreeLPStrideEnv(gym.Env):
         # misc
         seed: Optional[int] = None,
         obs_clip: float = 1e3,
+        action_order: str = "stride",            # "stride" or "canonical"
     ):
         super().__init__()
 
@@ -133,6 +154,9 @@ class ThreeLPStrideEnv(gym.Env):
             shape=(self.action_dim,),
             dtype=np.float32,
         )
+        if action_order not in ("stride", "canonical"):
+            raise ValueError("action_order must be 'stride' or 'canonical'")
+        self.action_order = action_order
 
         # --- State / observation definition ---------------------------------
         # We work in "error coordinates" relative to the reference manifold:
@@ -397,6 +421,9 @@ class ThreeLPStrideEnv(gym.Env):
 
         # SAC usually outputs in [-1,1]; we still clip for safety
         act = np.clip(act, -1.0, 1.0)
+        if self.action_order == "canonical":
+            act = _canonical_action_to_stride(act)
+
         delta_p = self.action_scale * act  # 8D residual on torque parameters
 
         # Reference torque parameters for this command speed
