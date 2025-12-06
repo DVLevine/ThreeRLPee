@@ -6,9 +6,6 @@
   <component name="ChangeListManager">
     <list default="true" id="1a8e2bf6-3b61-46bf-9584-cf1449945024" name="Changes" comment="Tried to make code and conventions that follow the working conventions inside the dynamics C++ sim for its internal work. made some test batteries - hope correct, will inspect again.">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ThreeLPee/src/three_lp_sim.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/ThreeLPee/src/three_lp_sim.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/env_threelp_stride_sac.py" beforeDir="false" afterPath="$PROJECT_DIR$/env_threelp_stride_sac.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_env.py" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -26,7 +23,7 @@
     <option name="RECENT_BRANCH_BY_REPOSITORY">
       <map>
         <entry key="$PROJECT_DIR$" value="c8e913ffdec5c87a0aeddf58e7785e2b2e5cab34" />
-        <entry key="$PROJECT_DIR$/ThreeLPee" value="Dec2_RL_Integration" />
+        <entry key="$PROJECT_DIR$/ThreeLPee" value="e96a4872fe547845d941fb7cd74575a138a4263d" />
       </map>
     </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
@@ -58,7 +55,7 @@
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
     "RunOnceActivity.git.unshallow": "true",
-    "git-widget-placeholder": "c8e913ff",
+    "git-widget-placeholder": "CleanConvention",
     "last_opened_file_path": "/home/d-line/PycharmProjects/ThreeRLPee/runs/sb3_smoke/monitor",
     "node.js.detected.package.eslint": "true",
     "node.js.detected.package.tslint": "true",
@@ -84,14 +81,6 @@
       <option name="presentableId" value="Default" />
       <updated>1764059985891</updated>
       <workItem from="1764059986984" duration="163961000" />
-    </task>
-    <task id="LOCAL-00001" summary="Updating the project to have the three_lp dynamics native in python">
-      <option name="closed" value="true" />
-      <created>1764316366119</created>
-      <option name="number" value="00001" />
-      <option name="presentableId" value="LOCAL-00001" />
-      <option name="project" value="LOCAL" />
-      <updated>1764316366119</updated>
     </task>
     <task id="LOCAL-00002" summary="Pybind and headless comparison for sim rollout is the same for C++ and python, albeit C++ is about 7 times faster.">
       <option name="closed" value="true" />
@@ -477,7 +466,15 @@
       <option name="project" value="LOCAL" />
       <updated>1764883879155</updated>
     </task>
-    <option name="localTasksCounter" value="50" />
+    <task id="LOCAL-00050" summary="Tried to make code and conventions that follow the working conventions inside the dynamics C++ sim for its internal work. made some test batteries - hope correct, will inspect again.">
+      <option name="closed" value="true" />
+      <created>1764999373289</created>
+      <option name="number" value="00050" />
+      <option name="presentableId" value="LOCAL-00050" />
+      <option name="project" value="LOCAL" />
+      <updated>1764999373289</updated>
+    </task>
+    <option name="localTasksCounter" value="51" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
