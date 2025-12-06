@@ -103,14 +103,65 @@ def maybe_visualize(states: List[np.ndarray], env: ThreeLPStrideEnv, loop: bool)
         print(f"[viz] visualize_trajectory error: {exc}")
 
 
-def rollout(model: SAC, vec_env: DummyVecEnv, steps: int, deterministic: bool) -> tuple[list[np.ndarray], list[float], list[dict]]:
+def maybe_visualize_plan(stride_trajs: List[List[np.ndarray]],
+                         stride_uv: List[np.ndarray],
+                         env: ThreeLPStrideEnv,
+                         loop: bool,
+                         start_support_sign: int) -> None:
+    if not stride_trajs:
+        print("[viz] no stride trajectories captured; nothing to visualize")
+        return
+    if threelp is None:
+        print("[viz] threelp module not available; skipping visualization")
+        return
+    if not hasattr(threelp, "visualize_stride_plan"):
+        print("[viz] visualize_stride_plan not available (build pybind with visualizer)")
+        return
+    try:
+        params = env.sim.get_params() if hasattr(env.sim, "get_params") else getattr(env.sim, "params", None)
+    except Exception:
+        params = None
+    if params is None:
+        print("[viz] could not fetch sim params; skipping visualization")
+        return
+
+    stride_state_objs: List[List[Any]] = []
+    for traj in stride_trajs:
+        traj_states = [np.asarray(q, dtype=np.float64).tolist() for q in traj]
+        if traj_states:
+            stride_state_objs.append(traj_states)
+    if not stride_state_objs:
+        print("[viz] no non-empty stride trajectories to visualize")
+        return
+
+    uv_list = [np.asarray(u, dtype=np.float64).tolist() for u in stride_uv] if stride_uv else []
+    try:
+        threelp.visualize_stride_plan(
+            stride_state_objs,
+            uv_list,
+            t_ds=env.t_ds,
+            t_ss=env.t_ss,
+            params=params,
+            start_support_sign=int(start_support_sign),
+            fps=60.0,
+            loop=loop,
+            wait_for_close=True,
+        )
+    except Exception as exc:  # pragma: no cover - visualization helper
+        print(f"[viz] visualize_stride_plan error: {exc}")
+
+
+def rollout(model: SAC, vec_env: DummyVecEnv, steps: int, deterministic: bool) -> tuple[list[np.ndarray], list[float], list[dict], list[list[np.ndarray]], list[np.ndarray], int]:
     env = vec_env.envs[0]
     env.capture_trajectory = True
 
     obs = vec_env.reset()
+    start_support_sign = int(getattr(env, "support_sign", 1))
     states: List[np.ndarray] = []
     rewards: List[float] = []
     infos: List[dict] = []
+    stride_trajs: List[List[np.ndarray]] = []
+    stride_uv: List[np.ndarray] = []
 
     # Starting state after reset
     if hasattr(env, "state_q"):
@@ -123,7 +174,12 @@ def rollout(model: SAC, vec_env: DummyVecEnv, steps: int, deterministic: bool) -
         info0 = info[0] if isinstance(info, (list, tuple)) else info
         traj = info0.get("trajectory")
         if traj:
-            states.extend(np.asarray(traj, dtype=np.float64))
+            traj_arr = np.asarray(traj, dtype=np.float64)
+            stride_trajs.append([np.asarray(s, dtype=np.float64) for s in traj_arr])
+            states.extend(traj_arr)
+
+        if "p_stride" in info0:
+            stride_uv.append(np.asarray(info0.get("p_stride", np.zeros(8)), dtype=np.float64))
 
         rewards.append(float(rew[0]))
         infos.append(info0)
@@ -131,7 +187,7 @@ def rollout(model: SAC, vec_env: DummyVecEnv, steps: int, deterministic: bool) -
         if done[0]:
             break
 
-    return states, rewards, infos
+    return states, rewards, infos, stride_trajs, stride_uv, start_support_sign
 
 
 def parse_args():
@@ -147,6 +203,7 @@ def parse_args():
     p.add_argument("--reset-noise", type=float, default=None, help="Override reset noise std for rollout.")
     p.add_argument("--deterministic", action="store_true", help="Use deterministic SAC actions.")
     p.add_argument("--visualize", action="store_true", help="Replay rollout in Open3D if available.")
+    p.add_argument("--visualize-plan", action="store_true", help="Use stride-plan overlay visualizer (requires visualizer build).")
     p.add_argument("--visualize-episode", type=int, default=0, help="Which episode index to visualize (0-based).")
     p.add_argument("--loop", action="store_true", help="Loop the visualization playback.")
     p.add_argument("--save-trajectory", type=str, default=None, help="Optional path prefix to save captured states as .npy")
@@ -180,6 +237,9 @@ def main():
     all_states: List[List[np.ndarray]] = []
     all_rewards: List[List[float]] = []
     all_infos: List[List[dict]] = []
+    all_stride_trajs: List[List[List[np.ndarray]]] = []
+    all_stride_uv: List[List[np.ndarray]] = []
+    start_support_signs: List[int] = []
 
     for ep in range(max(1, args.episodes)):
         seed_ep = args.seed + ep if args.seed is not None else None
@@ -194,10 +254,13 @@ def main():
                 except Exception:
                     pass
         obs = vec_env.reset()
-        states, rewards, infos = rollout(model, vec_env, steps=steps, deterministic=args.deterministic)
+        states, rewards, infos, stride_trajs, stride_uv, start_sign = rollout(model, vec_env, steps=steps, deterministic=args.deterministic)
         all_states.append(states)
         all_rewards.append(rewards)
         all_infos.append(infos)
+        all_stride_trajs.append(stride_trajs)
+        all_stride_uv.append(stride_uv)
+        start_support_signs.append(start_sign)
         print(f"[rollout ep={ep}] strides={len(rewards)}  total_reward={sum(rewards):.3f}  fallen={infos[-1].get('fallen') if infos else None}")
 
         if args.save_trajectory:
@@ -208,7 +271,13 @@ def main():
 
     if args.visualize:
         ep_idx = max(0, min(args.visualize_episode, len(all_states) - 1))
-        maybe_visualize(all_states[ep_idx], env, loop=args.loop)
+        if args.visualize_plan:
+            stride_trajs = all_stride_trajs[ep_idx] if ep_idx < len(all_stride_trajs) else []
+            stride_uv = all_stride_uv[ep_idx] if ep_idx < len(all_stride_uv) else []
+            start_sign = start_support_signs[ep_idx] if ep_idx < len(start_support_signs) else 1
+            maybe_visualize_plan(stride_trajs, stride_uv, env, loop=args.loop, start_support_sign=start_sign)
+        else:
+            maybe_visualize(all_states[ep_idx], env, loop=args.loop)
 
 
 if __name__ == "__main__":

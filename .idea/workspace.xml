@@ -4,8 +4,13 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="1a8e2bf6-3b61-46bf-9584-cf1449945024" name="Changes" comment="Tried to make code and conventions that follow the working conventions inside the dynamics C++ sim for its internal work. made some test batteries - hope correct, will inspect again.">
+    <list default="true" id="1a8e2bf6-3b61-46bf-9584-cf1449945024" name="Changes" comment="Added torque tester - testing the inputs to see if they are what we expect or not.">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ThreeLPee/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/ThreeLPee/CMakeLists.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ThreeLPee/include/visualizer_app.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/ThreeLPee/include/visualizer_app.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ThreeLPee/src/three_lp_pybind.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/ThreeLPee/src/three_lp_pybind.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ThreeLPee/src/visualizer_replay.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/ThreeLPee/src/visualizer_replay.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/viz_stride_sb3.py" beforeDir="false" afterPath="$PROJECT_DIR$/viz_stride_sb3.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -81,14 +86,6 @@
       <option name="presentableId" value="Default" />
       <updated>1764059985891</updated>
       <workItem from="1764059986984" duration="163961000" />
-    </task>
-    <task id="LOCAL-00002" summary="Pybind and headless comparison for sim rollout is the same for C++ and python, albeit C++ is about 7 times faster.">
-      <option name="closed" value="true" />
-      <created>1764322846492</created>
-      <option name="number" value="00002" />
-      <option name="presentableId" value="LOCAL-00002" />
-      <option name="project" value="LOCAL" />
-      <updated>1764322846492</updated>
     </task>
     <task id="LOCAL-00003" summary="some additions for boilerplate required for the RL part.">
       <option name="closed" value="true" />
@@ -474,7 +471,15 @@
       <option name="project" value="LOCAL" />
       <updated>1764999373289</updated>
     </task>
-    <option name="localTasksCounter" value="51" />
+    <task id="LOCAL-00051" summary="Added torque tester - testing the inputs to see if they are what we expect or not.">
+      <option name="closed" value="true" />
+      <created>1765003674879</created>
+      <option name="number" value="00051" />
+      <option name="presentableId" value="LOCAL-00051" />
+      <option name="project" value="LOCAL" />
+      <updated>1765003674879</updated>
+    </task>
+    <option name="localTasksCounter" value="52" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -492,7 +497,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="Found reference gaits are extremely sensitive - really a difficult unstable equilbirum. About to add warmstarting from a TP controller." />
     <MESSAGE value="Started implementing small dt and have some start to implementing TP training wheels." />
     <MESSAGE value="Huge update to prepare C++ interface and bindings for dt style RL policy rather than stride style." />
     <MESSAGE value="dt style program is working better - though still doesn't seem to make progress." />
@@ -517,7 +521,8 @@
     <MESSAGE value="Made system Markov - I think? But still no dice. Maybe need to tweak learning rates or try stable baselines?" />
     <MESSAGE value="messed with underlying transformatioins." />
     <MESSAGE value="Tried to make code and conventions that follow the working conventions inside the dynamics C++ sim for its internal work. made some test batteries - hope correct, will inspect again." />
-    <option name="LAST_COMMIT_MESSAGE" value="Tried to make code and conventions that follow the working conventions inside the dynamics C++ sim for its internal work. made some test batteries - hope correct, will inspect again." />
+    <MESSAGE value="Added torque tester - testing the inputs to see if they are what we expect or not." />
+    <option name="LAST_COMMIT_MESSAGE" value="Added torque tester - testing the inputs to see if they are what we expect or not." />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/ThreeRLPee$train_3lp_ac.coverage" NAME="train_3lp_ac Coverage Results" MODIFIED="1764061027777" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
